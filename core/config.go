@@ -24,9 +24,10 @@ type StoreConfig struct {
 
 // HelmetConfig configures IAM.
 type HelmetConfig struct {
-	RootResolver RootResolverConfig `yaml:"root_resolver"`
-	PowersDir    string             `yaml:"powers_dir"`
-	AgentsDir    string             `yaml:"agents_dir"`
+	RootResolver    RootResolverConfig `yaml:"root_resolver"`
+	PowersDir       string             `yaml:"powers_dir"`
+	AgentsDir       string             `yaml:"agents_dir"`
+	RequireApproval bool               `yaml:"require_approval"` // if true, unapproved users are silently ignored
 }
 
 // RootResolverConfig determines how root status is resolved.

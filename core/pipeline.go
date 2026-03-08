@@ -6,16 +6,25 @@ import (
 )
 
 type defaultPipeline struct {
-	telepath Telepath
-	helmet   Helmet
-	cerebro  Cerebro
-	warp     Warp
-	schedule Schedule
-	logger   *slog.Logger
+	telepath        Telepath
+	helmet          Helmet
+	cerebro         Cerebro
+	warp            Warp
+	schedule        Schedule
+	requireApproval bool
+	logger          *slog.Logger
 }
 
-func NewPipeline(telepath Telepath, helmet Helmet, cerebro Cerebro, warp Warp, schedule Schedule, logger *slog.Logger) Pipeline {
-	return &defaultPipeline{
+// PipelineOption configures pipeline behavior.
+type PipelineOption func(*defaultPipeline)
+
+// WithRequireApprovalGate enables the approval gate — unapproved non-root users are silently ignored.
+func WithRequireApprovalGate(require bool) PipelineOption {
+	return func(p *defaultPipeline) { p.requireApproval = require }
+}
+
+func NewPipeline(telepath Telepath, helmet Helmet, cerebro Cerebro, warp Warp, schedule Schedule, logger *slog.Logger, opts ...PipelineOption) Pipeline {
+	p := &defaultPipeline{
 		telepath: telepath,
 		helmet:   helmet,
 		cerebro:  cerebro,
@@ -23,6 +32,10 @@ func NewPipeline(telepath Telepath, helmet Helmet, cerebro Cerebro, warp Warp, s
 		schedule: schedule,
 		logger:   logger,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 func (p *defaultPipeline) Start(ctx context.Context) error {
@@ -71,6 +84,15 @@ func (p *defaultPipeline) handleMessage(ctx context.Context, msg Message) {
 	enriched, err := p.helmet.Process(ctx, msg)
 	if err != nil {
 		p.logger.Error("helmet rejected message", "error", err, "message_id", msg.ID)
+		return
+	}
+
+	// Approval gate: unapproved users are silently ignored
+	if p.requireApproval && !enriched.Approved {
+		p.logger.Info("message ignored, user not approved",
+			"user_id", msg.UserID,
+			"message_id", msg.ID,
+		)
 		return
 	}
 

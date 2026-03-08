@@ -23,13 +23,14 @@ func generateID() string {
 }
 
 type defaultHelmet struct {
-	store        Store
-	rootResolver RootResolver
-	powersDir    string
-	agentsDir    string
-	powerCache   map[string]*Power
-	powerMu      sync.RWMutex
-	logger       *slog.Logger
+	store           Store
+	rootResolver    RootResolver
+	requireApproval bool
+	powersDir       string
+	agentsDir       string
+	powerCache      map[string]*Power
+	powerMu         sync.RWMutex
+	logger          *slog.Logger
 }
 
 func NewHelmet(store Store, rootResolver RootResolver, logger *slog.Logger, opts ...HelmetOption) Helmet {
@@ -55,6 +56,10 @@ func WithPowersDir(dir string) HelmetOption {
 
 func WithAgentsDir(dir string) HelmetOption {
 	return func(h *defaultHelmet) { h.agentsDir = dir }
+}
+
+func WithRequireApproval(require bool) HelmetOption {
+	return func(h *defaultHelmet) { h.requireApproval = require }
 }
 
 func (h *defaultHelmet) Process(ctx context.Context, msg Message) (*EnrichedMessage, error) {
@@ -111,6 +116,9 @@ func (h *defaultHelmet) Process(ctx context.Context, msg Message) (*EnrichedMess
 	// 7. Build tags (auto-generated + admin-configured)
 	tags := h.buildTags(db, msg, chatID)
 
+	// Determine effective approval: root is always approved
+	approved := user.Approved || isRoot
+
 	enriched := &EnrichedMessage{
 		Message:  msg,
 		ChatID:   chatID,
@@ -120,6 +128,7 @@ func (h *defaultHelmet) Process(ctx context.Context, msg Message) (*EnrichedMess
 		PowerSet: powerSet,
 		Tags:     tags,
 		IsRoot:   isRoot,
+		Approved: approved,
 	}
 
 	h.logger.Info("message enriched",
@@ -141,6 +150,7 @@ func (h *defaultHelmet) ensureSchema(db *sql.DB) error {
 			id TEXT PRIMARY KEY,
 			username TEXT DEFAULT '',
 			first_name TEXT DEFAULT '',
+			approved BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT (datetime('now')),
 			last_seen DATETIME DEFAULT (datetime('now'))
 		);
@@ -196,9 +206,12 @@ func (h *defaultHelmet) ensureSchema(db *sql.DB) error {
 // --- User Management ---
 
 func (h *defaultHelmet) getOrCreateUser(db *sql.DB, userID string, metadata map[string]any) (*User, error) {
+	// Migration: add approved column if missing (for existing DBs)
+	db.Exec("ALTER TABLE users ADD COLUMN approved BOOLEAN DEFAULT 0")
+
 	var user User
-	err := db.QueryRow("SELECT id, username, first_name, created_at, last_seen FROM users WHERE id = ?", userID).
-		Scan(&user.ID, &user.Username, &user.FirstName, &user.CreatedAt, &user.LastSeen)
+	err := db.QueryRow("SELECT id, username, first_name, approved, created_at, last_seen FROM users WHERE id = ?", userID).
+		Scan(&user.ID, &user.Username, &user.FirstName, &user.Approved, &user.CreatedAt, &user.LastSeen)
 
 	if err == sql.ErrNoRows {
 		username := ""
@@ -213,13 +226,13 @@ func (h *defaultHelmet) getOrCreateUser(db *sql.DB, userID string, metadata map[
 		}
 
 		now := time.Now()
-		_, err = db.Exec("INSERT INTO users (id, username, first_name, created_at, last_seen) VALUES (?, ?, ?, ?, ?)",
-			userID, username, firstName, now, now)
+		_, err = db.Exec("INSERT INTO users (id, username, first_name, approved, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+			userID, username, firstName, false, now, now)
 		if err != nil {
 			return nil, err
 		}
 
-		user = User{ID: userID, Username: username, FirstName: firstName, CreatedAt: now, LastSeen: now}
+		user = User{ID: userID, Username: username, FirstName: firstName, Approved: false, CreatedAt: now, LastSeen: now}
 		h.logger.Info("user created", "user_id", userID, "username", username)
 	} else if err != nil {
 		return nil, err

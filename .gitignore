@@ -1,9 +1,9 @@
 bin/
-rogue-pipeline
-rogue-coordinator
-rogue-store
-rogue-scheduler
-rogue-iam
+/rogue-pipeline
+/rogue-coordinator
+/rogue-store
+/rogue-scheduler
+/rogue-iam
 *.db
 *.db-wal
 *.db-shm

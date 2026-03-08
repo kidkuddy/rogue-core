@@ -41,6 +41,7 @@ type EnrichedMessage struct {
 	PowerSet PowerSet    `json:"power_set"`
 	Tags     []string    `json:"tags"`
 	IsRoot   bool        `json:"is_root"`
+	Approved bool        `json:"approved"` // root is always approved; others need explicit approval
 }
 
 // User represents a resolved user record.
@@ -48,6 +49,7 @@ type User struct {
 	ID        string    `json:"id"`
 	Username  string    `json:"username"`
 	FirstName string    `json:"first_name"`
+	Approved  bool      `json:"approved"`
 	CreatedAt time.Time `json:"created_at"`
 	LastSeen  time.Time `json:"last_seen"`
 }

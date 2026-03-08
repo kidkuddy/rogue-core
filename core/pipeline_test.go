@@ -272,3 +272,99 @@ Use SQL for queries.
 
 	pipeline.Stop(ctx)
 }
+
+func TestPipelineApprovalGate(t *testing.T) {
+	logger, store, _ := setupPipelineTest(t)
+
+	telepath := NewTelepath(logger)
+
+	source := &StubSource{
+		SourceID: "test:approval",
+		AgentID:  "rogue",
+		Messages: []Message{
+			{
+				ID:        "msg-unapproved",
+				ChannelID: "chan-1",
+				UserID:    "stranger",
+				ChatType:  "private",
+				Text:      "hello",
+				Reply:     true,
+			},
+		},
+		Logger: logger,
+	}
+	telepath.RegisterSource(source)
+
+	rootResolver := func(string) bool { return false }
+	helmet := NewHelmet(store, rootResolver, logger)
+
+	provider := &StubProvider{Logger: logger}
+	cerebro := NewCerebro(store, provider, nil, 100, 3, logger)
+	warp := NewWarp(telepath, store, logger)
+
+	pipeline := NewPipeline(telepath, helmet, cerebro, warp, NewSchedule(store, logger), logger,
+		WithRequireApprovalGate(true))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := pipeline.Start(ctx); err != nil {
+		t.Fatalf("pipeline start failed: %v", err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	if len(source.Received) != 0 {
+		t.Errorf("expected 0 responses for unapproved user, got %d", len(source.Received))
+	}
+
+	pipeline.Stop(ctx)
+}
+
+func TestPipelineApprovalGateRootBypass(t *testing.T) {
+	logger, store, _ := setupPipelineTest(t)
+
+	telepath := NewTelepath(logger)
+
+	source := &StubSource{
+		SourceID: "test:root-bypass",
+		AgentID:  "rogue",
+		Messages: []Message{
+			{
+				ID:        "msg-root",
+				ChannelID: "chan-1",
+				UserID:    "owner",
+				ChatType:  "private",
+				Text:      "root message",
+				Reply:     true,
+			},
+		},
+		Logger: logger,
+	}
+	telepath.RegisterSource(source)
+
+	rootResolver := func(userID string) bool { return userID == "owner" }
+	helmet := NewHelmet(store, rootResolver, logger)
+
+	provider := &StubProvider{Logger: logger}
+	cerebro := NewCerebro(store, provider, nil, 100, 3, logger)
+	warp := NewWarp(telepath, store, logger)
+
+	pipeline := NewPipeline(telepath, helmet, cerebro, warp, NewSchedule(store, logger), logger,
+		WithRequireApprovalGate(true))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := pipeline.Start(ctx); err != nil {
+		t.Fatalf("pipeline start failed: %v", err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	if len(source.Received) != 1 {
+		t.Errorf("expected 1 response for root user, got %d", len(source.Received))
+	}
+
+	pipeline.Stop(ctx)
+}
