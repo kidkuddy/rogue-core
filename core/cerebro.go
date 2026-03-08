@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 )
@@ -16,7 +17,6 @@ type defaultCerebro struct {
 	logger          *slog.Logger
 }
 
-// NewCerebro creates an orchestrator with a default provider.
 func NewCerebro(store Store, defaultProvider AgentProvider, mcpRegistry MCPRegistry, maxTurns int, maxDepth int, logger *slog.Logger) Cerebro {
 	c := &defaultCerebro{
 		store:           store,
@@ -31,20 +31,17 @@ func NewCerebro(store Store, defaultProvider AgentProvider, mcpRegistry MCPRegis
 	return c
 }
 
-// RegisterProvider adds an additional agent provider.
-// Use tags like "provider:my-agent" on a session to route to it.
 func (c *defaultCerebro) RegisterProvider(provider AgentProvider) {
 	c.providers[provider.ID()] = provider
 	c.logger.Info("provider registered", "provider_id", provider.ID())
 }
 
 func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*AgentResult, error) {
-	// Check agent-to-agent depth limit
 	if msg.AgentTurnDepth > c.maxDepth {
 		return nil, fmt.Errorf("agent turn depth %d exceeds max %d", msg.AgentTurnDepth, c.maxDepth)
 	}
 
-	// Select provider based on tags (look for "provider:<id>" tag)
+	// Select provider based on tags
 	provider := c.providers[c.defaultProvider]
 	for _, tag := range msg.Tags {
 		if len(tag) > 9 && tag[:9] == "provider:" {
@@ -53,9 +50,7 @@ func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*Ag
 				provider = p
 			} else {
 				c.logger.Warn("unknown provider in tag, using default",
-					"requested", providerID,
-					"default", c.defaultProvider,
-				)
+					"requested", providerID, "default", c.defaultProvider)
 			}
 		}
 	}
@@ -67,9 +62,10 @@ func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*Ag
 		"turn_depth", msg.AgentTurnDepth,
 	)
 
-	// TODO: Load conversation state from Store("conversations")
+	// Load conversation state from Store
+	sessionState := c.loadSessionState(msg.ChatID)
 
-	// TODO: Generate dynamic MCP config based on PowerSet
+	// Generate dynamic MCP config
 	var mcpConfigPath string
 	if c.mcpRegistry != nil && len(msg.PowerSet.Tools) > 0 {
 		var err error
@@ -81,7 +77,7 @@ func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*Ag
 
 	req := AgentRequest{
 		ChatID:        msg.ChatID,
-		SessionState:  nil, // TODO: load from Store("conversations")
+		SessionState:  sessionState,
 		Persona:       msg.Agent.Persona,
 		Prompt:        msg.Text,
 		Attachments:   msg.Attachments,
@@ -104,7 +100,10 @@ func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*Ag
 		return nil, fmt.Errorf("agent execution failed: %w", err)
 	}
 
-	// TODO: Save conversation state to Store("conversations")
+	// Save conversation state
+	if result.SessionState != nil {
+		c.saveSessionState(msg.ChatID, result.SessionState)
+	}
 
 	c.logger.Info("agent execution complete",
 		"chat_id", msg.ChatID,
@@ -114,4 +113,48 @@ func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*Ag
 	)
 
 	return result, nil
+}
+
+// --- Conversation State Persistence ---
+
+func (c *defaultCerebro) ensureConversationSchema() *sql.DB {
+	db, err := c.store.Namespace("conversations").DB()
+	if err != nil {
+		return nil
+	}
+	db.Exec(`CREATE TABLE IF NOT EXISTS sessions (
+		chat_id TEXT PRIMARY KEY,
+		provider TEXT DEFAULT '',
+		state TEXT DEFAULT '',
+		updated_at DATETIME DEFAULT (datetime('now'))
+	)`)
+	return db
+}
+
+func (c *defaultCerebro) loadSessionState(chatID string) any {
+	db := c.ensureConversationSchema()
+	if db == nil {
+		return nil
+	}
+
+	var state string
+	err := db.QueryRow("SELECT state FROM sessions WHERE chat_id = ?", chatID).Scan(&state)
+	if err != nil || state == "" {
+		return nil
+	}
+	return state
+}
+
+func (c *defaultCerebro) saveSessionState(chatID string, state any) {
+	db := c.ensureConversationSchema()
+	if db == nil {
+		return
+	}
+
+	stateStr := fmt.Sprintf("%v", state)
+	db.Exec(`INSERT INTO sessions (chat_id, state, updated_at) VALUES (?, ?, datetime('now'))
+		ON CONFLICT(chat_id) DO UPDATE SET state = excluded.state, updated_at = datetime('now')`,
+		chatID, stateStr)
+
+	c.logger.Info("session state saved", "chat_id", chatID)
 }
