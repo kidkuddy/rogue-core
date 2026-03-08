@@ -8,16 +8,20 @@ import (
 	"time"
 )
 
+func setupPipelineTest(t *testing.T) (*slog.Logger, Store, string) {
+	t.Helper()
+	dir := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	store := NewSQLiteStore(dir, logger)
+	t.Cleanup(func() { store.Close() })
+	return logger, store, dir
+}
+
 func TestPipelineEndToEnd(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger, store, _ := setupPipelineTest(t)
 
-	// Store (stub)
-	store := NewStubStore()
-
-	// Telepath
 	telepath := NewTelepath(logger)
 
-	// Source: emits one test message
 	source := &StubSource{
 		SourceID: "test:source1",
 		AgentID:  "rogue",
@@ -35,20 +39,12 @@ func TestPipelineEndToEnd(t *testing.T) {
 	}
 	telepath.RegisterSource(source)
 
-	// Helmet (default with stub store)
-	rootResolver := func(userID string) bool {
-		return userID == "user-456"
-	}
+	rootResolver := func(userID string) bool { return userID == "user-456" }
 	helmet := NewHelmet(store, rootResolver, logger)
 
-	// Cerebro (with stub provider)
 	provider := &StubProvider{Logger: logger}
 	cerebro := NewCerebro(store, provider, nil, 100, 3, logger)
-
-	// Warp
 	warp := NewWarp(telepath, store, logger)
-
-	// Pipeline
 	pipeline := NewPipeline(telepath, helmet, cerebro, warp, NewSchedule(store, logger), logger)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -58,10 +54,8 @@ func TestPipelineEndToEnd(t *testing.T) {
 		t.Fatalf("pipeline start failed: %v", err)
 	}
 
-	// Wait for message to flow through
 	time.Sleep(500 * time.Millisecond)
 
-	// Verify response was received
 	if len(source.Received) == 0 {
 		t.Fatal("expected at least one response, got none")
 	}
@@ -77,15 +71,12 @@ func TestPipelineEndToEnd(t *testing.T) {
 		t.Error("expected non-empty response text")
 	}
 
-	t.Logf("response: %s", resp.Text)
-
 	pipeline.Stop(ctx)
 }
 
 func TestPipelineReplySuppressed(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger, store, _ := setupPipelineTest(t)
 
-	store := NewStubStore()
 	telepath := NewTelepath(logger)
 
 	source := &StubSource{
@@ -98,7 +89,7 @@ func TestPipelineReplySuppressed(t *testing.T) {
 				UserID:    "user-100",
 				ChatType:  "scheduled",
 				Text:      "background task",
-				Reply:     false, // suppressed
+				Reply:     false,
 			},
 		},
 		Logger: logger,
@@ -128,9 +119,8 @@ func TestPipelineReplySuppressed(t *testing.T) {
 }
 
 func TestPipelineAgentDepthLimit(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger, store, _ := setupPipelineTest(t)
 
-	store := NewStubStore()
 	telepath := NewTelepath(logger)
 
 	source := &StubSource{
@@ -144,7 +134,7 @@ func TestPipelineAgentDepthLimit(t *testing.T) {
 				ChatType:       "agent",
 				Text:           "agent-to-agent message",
 				Reply:          true,
-				AgentTurnDepth: 5, // exceeds default max of 3
+				AgentTurnDepth: 5,
 			},
 		},
 		Logger: logger,
@@ -166,7 +156,6 @@ func TestPipelineAgentDepthLimit(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// Agent depth exceeded — Cerebro should reject, no response delivered
 	if len(source.Received) != 0 {
 		t.Errorf("expected no responses (depth exceeded), got %d", len(source.Received))
 	}
@@ -175,9 +164,8 @@ func TestPipelineAgentDepthLimit(t *testing.T) {
 }
 
 func TestPipelineMultipleSources(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger, store, _ := setupPipelineTest(t)
 
-	store := NewStubStore()
 	telepath := NewTelepath(logger)
 
 	source1 := &StubSource{
@@ -221,12 +209,65 @@ func TestPipelineMultipleSources(t *testing.T) {
 		t.Errorf("source2: expected 1 response, got %d", len(source2.Received))
 	}
 
-	// Verify responses went to correct sources
 	if len(source1.Received) > 0 && source1.Received[0].MessageID != "msg-t1" {
 		t.Errorf("source1 got wrong message: %s", source1.Received[0].MessageID)
 	}
 	if len(source2.Received) > 0 && source2.Received[0].MessageID != "msg-t2" {
 		t.Errorf("source2 got wrong message: %s", source2.Received[0].MessageID)
+	}
+
+	pipeline.Stop(ctx)
+}
+
+func TestPipelineWithPowers(t *testing.T) {
+	logger, store, dir := setupPipelineTest(t)
+
+	// Create power files
+	os.MkdirAll(dir+"/powers", 0755)
+	os.WriteFile(dir+"/powers/memory.md", []byte(`---
+name: memory
+tools:
+  - rogue-store__sql
+  - rogue-store__file_read
+---
+
+Use SQL for queries.
+`), 0644)
+
+	telepath := NewTelepath(logger)
+
+	source := &StubSource{
+		SourceID: "test:src",
+		AgentID:  "rogue",
+		Messages: []Message{
+			{ID: "msg-p1", ChannelID: "chan-1", UserID: "user-1", ChatType: "private", Text: "test powers", Reply: true},
+		},
+		Logger: logger,
+	}
+	telepath.RegisterSource(source)
+
+	helmet := NewHelmet(store, func(string) bool { return true }, logger,
+		WithPowersDir(dir+"/powers"))
+
+	// Assign power before processing
+	helmet.(*defaultHelmet).AssignPower("rogue", "user-1", "chan-1", "memory", "admin")
+
+	provider := &StubProvider{Logger: logger}
+	cerebro := NewCerebro(store, provider, nil, 100, 3, logger)
+	warp := NewWarp(telepath, store, logger)
+	pipeline := NewPipeline(telepath, helmet, cerebro, warp, NewSchedule(store, logger), logger)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := pipeline.Start(ctx); err != nil {
+		t.Fatalf("pipeline start failed: %v", err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	if len(source.Received) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(source.Received))
 	}
 
 	pipeline.Stop(ctx)
