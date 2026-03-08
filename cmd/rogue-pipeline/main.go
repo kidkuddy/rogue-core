@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -32,6 +33,10 @@ func main() {
 		runStubMode(logger)
 		return
 	}
+
+	// Resolve relative paths in config against the config file's directory
+	configDir, _ := filepath.Abs(filepath.Dir(configPath))
+	resolveRelativePaths(cfg, configDir)
 
 	runFromConfig(cfg, logger)
 }
@@ -156,6 +161,28 @@ func runStubMode(logger *slog.Logger) {
 	<-sigCh
 
 	pipeline.Stop(ctx)
+}
+
+func resolveRelativePaths(cfg *core.Config, baseDir string) {
+	resolve := func(p string) string {
+		if p == "" || filepath.IsAbs(p) {
+			return p
+		}
+		abs, err := filepath.Abs(filepath.Join(baseDir, p))
+		if err != nil {
+			return p
+		}
+		return abs
+	}
+
+	cfg.Store.DataDir = resolve(cfg.Store.DataDir)
+	cfg.Helmet.PowersDir = resolve(cfg.Helmet.PowersDir)
+	cfg.Helmet.AgentsDir = resolve(cfg.Helmet.AgentsDir)
+
+	for name, tool := range cfg.Cerebro.Tools {
+		tool.Command = resolve(tool.Command)
+		cfg.Cerebro.Tools[name] = tool
+	}
 }
 
 func buildSource(cfg core.SourceConfig, logger *slog.Logger) (core.Source, error) {
