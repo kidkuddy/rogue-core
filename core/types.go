@@ -50,6 +50,7 @@ type User struct {
 	Username  string    `json:"username"`
 	FirstName string    `json:"first_name"`
 	Approved  bool      `json:"approved"`
+	Blocked   bool      `json:"blocked"`
 	CreatedAt time.Time `json:"created_at"`
 	LastSeen  time.Time `json:"last_seen"`
 }

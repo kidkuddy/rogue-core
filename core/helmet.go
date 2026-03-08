@@ -86,6 +86,12 @@ func (h *defaultHelmet) Process(ctx context.Context, msg Message) (*EnrichedMess
 		return nil, fmt.Errorf("user resolution failed: %w", err)
 	}
 
+	// Blocked users are silently dropped
+	if user.Blocked {
+		h.logger.Info("message dropped, user is blocked", "user_id", msg.UserID)
+		return nil, fmt.Errorf("user %s is blocked", msg.UserID)
+	}
+
 	// 2. Map (source, channel, agent) -> chat_id
 	chatID, err := h.getOrCreateChat(db, msg.SourceID, msg.ChannelID, msg.AgentID)
 	if err != nil {
@@ -151,6 +157,7 @@ func (h *defaultHelmet) ensureSchema(db *sql.DB) error {
 			username TEXT DEFAULT '',
 			first_name TEXT DEFAULT '',
 			approved BOOLEAN DEFAULT 0,
+			blocked BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT (datetime('now')),
 			last_seen DATETIME DEFAULT (datetime('now'))
 		);
@@ -206,12 +213,13 @@ func (h *defaultHelmet) ensureSchema(db *sql.DB) error {
 // --- User Management ---
 
 func (h *defaultHelmet) getOrCreateUser(db *sql.DB, userID string, metadata map[string]any) (*User, error) {
-	// Migration: add approved column if missing (for existing DBs)
+	// Migration: add columns if missing (for existing DBs)
 	db.Exec("ALTER TABLE users ADD COLUMN approved BOOLEAN DEFAULT 0")
+	db.Exec("ALTER TABLE users ADD COLUMN blocked BOOLEAN DEFAULT 0")
 
 	var user User
-	err := db.QueryRow("SELECT id, username, first_name, approved, created_at, last_seen FROM users WHERE id = ?", userID).
-		Scan(&user.ID, &user.Username, &user.FirstName, &user.Approved, &user.CreatedAt, &user.LastSeen)
+	err := db.QueryRow("SELECT id, username, first_name, approved, blocked, created_at, last_seen FROM users WHERE id = ?", userID).
+		Scan(&user.ID, &user.Username, &user.FirstName, &user.Approved, &user.Blocked, &user.CreatedAt, &user.LastSeen)
 
 	if err == sql.ErrNoRows {
 		username := ""
@@ -226,13 +234,13 @@ func (h *defaultHelmet) getOrCreateUser(db *sql.DB, userID string, metadata map[
 		}
 
 		now := time.Now()
-		_, err = db.Exec("INSERT INTO users (id, username, first_name, approved, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
-			userID, username, firstName, false, now, now)
+		_, err = db.Exec("INSERT INTO users (id, username, first_name, approved, blocked, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			userID, username, firstName, false, false, now, now)
 		if err != nil {
 			return nil, err
 		}
 
-		user = User{ID: userID, Username: username, FirstName: firstName, Approved: false, CreatedAt: now, LastSeen: now}
+		user = User{ID: userID, Username: username, FirstName: firstName, Approved: false, Blocked: false, CreatedAt: now, LastSeen: now}
 		h.logger.Info("user created", "user_id", userID, "username", username)
 	} else if err != nil {
 		return nil, err

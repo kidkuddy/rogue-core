@@ -72,6 +72,16 @@ func main() {
 		mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to approve")),
 	), handleUserApprove)
 
+	s.AddTool(mcp.NewTool("user_block",
+		mcp.WithDescription("Block a user. All their messages will be silently dropped."),
+		mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to block")),
+	), handleUserBlock)
+
+	s.AddTool(mcp.NewTool("user_unblock",
+		mcp.WithDescription("Unblock a previously blocked user."),
+		mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to unblock")),
+	), handleUserUnblock)
+
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		os.Exit(1)
@@ -281,7 +291,10 @@ func handleUserList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResu
 		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
 	}
 
-	rows, err := db.Query(`SELECT user_id, username, first_name, created_at, last_seen FROM users ORDER BY last_seen DESC`)
+	// Migration: add blocked column if missing
+	db.Exec("ALTER TABLE users ADD COLUMN blocked BOOLEAN DEFAULT 0")
+
+	rows, err := db.Query(`SELECT id, username, first_name, approved, blocked, created_at, last_seen FROM users ORDER BY last_seen DESC`)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query error: %v", err)), nil
 	}
@@ -291,6 +304,8 @@ func handleUserList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResu
 		UserID    string `json:"user_id"`
 		Username  string `json:"username"`
 		FirstName string `json:"first_name"`
+		Approved  bool   `json:"approved"`
+		Blocked   bool   `json:"blocked"`
 		CreatedAt string `json:"created_at"`
 		LastSeen  string `json:"last_seen"`
 	}
@@ -298,7 +313,7 @@ func handleUserList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResu
 	var users []user
 	for rows.Next() {
 		var u user
-		rows.Scan(&u.UserID, &u.Username, &u.FirstName, &u.CreatedAt, &u.LastSeen)
+		rows.Scan(&u.UserID, &u.Username, &u.FirstName, &u.Approved, &u.Blocked, &u.CreatedAt, &u.LastSeen)
 		users = append(users, u)
 	}
 
@@ -331,4 +346,50 @@ func handleUserApprove(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 		return mcp.NewToolResultText(fmt.Sprintf("User %s not found", userID)), nil
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("User %s approved", userID)), nil
+}
+
+func handleUserBlock(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	userID, _ := req.GetArguments()["user_id"].(string)
+	if userID == "" {
+		return mcp.NewToolResultError("user_id is required"), nil
+	}
+
+	db, err := store.Namespace("iam").DB()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+	}
+
+	result, err := db.Exec("UPDATE users SET blocked = 1 WHERE id = ?", userID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("block failed: %v", err)), nil
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("User %s not found", userID)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("User %s blocked", userID)), nil
+}
+
+func handleUserUnblock(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	userID, _ := req.GetArguments()["user_id"].(string)
+	if userID == "" {
+		return mcp.NewToolResultError("user_id is required"), nil
+	}
+
+	db, err := store.Namespace("iam").DB()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+	}
+
+	result, err := db.Exec("UPDATE users SET blocked = 0 WHERE id = ?", userID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("block failed: %v", err)), nil
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("User %s not found", userID)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("User %s unblocked", userID)), nil
 }
