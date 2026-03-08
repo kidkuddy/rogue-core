@@ -54,15 +54,44 @@ func (p *Provider) Execute(ctx context.Context, req core.AgentRequest) (*core.Ag
 		args = append(args, "--system-prompt", systemPrompt)
 	}
 
-	// Tool filtering
-	if len(req.Tools) == 0 {
-		// No powers = no tools. --allowedTools doesn't block builtins, so use --disallowedTools.
-		args = append(args, "--disallowedTools",
-			"Bash", "Edit", "Write", "Read", "Glob", "Grep",
-			"Agent", "NotebookEdit", "WebFetch", "WebSearch")
-	} else {
+	// Tool filtering: --allowedTools controls MCP tools, --disallowedTools controls builtins.
+	// We always block builtins unless explicitly granted, and only allow granted MCP tools.
+	builtins := []string{"Bash", "Edit", "Write", "Read", "Glob", "Grep",
+		"Agent", "NotebookEdit", "WebFetch", "WebSearch"}
+
+	// Separate MCP tools from builtin tools
+	var mcpTools []string
+	grantedBuiltins := make(map[string]bool)
+	for _, t := range req.Tools {
+		isBuiltin := false
+		for _, b := range builtins {
+			if t == b {
+				isBuiltin = true
+				grantedBuiltins[b] = true
+				break
+			}
+		}
+		if !isBuiltin {
+			mcpTools = append(mcpTools, t)
+		}
+	}
+
+	// Allow only granted MCP tools
+	if len(mcpTools) > 0 {
 		args = append(args, "--allowedTools")
-		args = append(args, req.Tools...)
+		args = append(args, mcpTools...)
+	}
+
+	// Block builtins not explicitly granted
+	var blockedBuiltins []string
+	for _, b := range builtins {
+		if !grantedBuiltins[b] {
+			blockedBuiltins = append(blockedBuiltins, b)
+		}
+	}
+	if len(blockedBuiltins) > 0 {
+		args = append(args, "--disallowedTools")
+		args = append(args, blockedBuiltins...)
 	}
 
 	// Directory access

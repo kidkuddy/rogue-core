@@ -40,10 +40,16 @@ type mcpServerConfig struct {
 }
 
 func (r *defaultMCPRegistry) GenerateConfig(tools []string, env map[string]string) (string, error) {
-	// Determine which servers are needed
+	// Determine which servers are needed.
+	// Tool names follow Claude Code's MCP convention: "mcp__<server>__<tool>".
+	// Strip the "mcp__" prefix to get the server name.
 	neededServers := make(map[string]bool)
 	for _, tool := range tools {
-		parts := strings.SplitN(tool, "__", 2)
+		name := tool
+		if strings.HasPrefix(name, "mcp__") {
+			name = name[5:] // strip "mcp__"
+		}
+		parts := strings.SplitN(name, "__", 2)
 		if len(parts) >= 1 {
 			neededServers[parts[0]] = true
 		}
