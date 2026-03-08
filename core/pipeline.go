@@ -88,6 +88,13 @@ func (p *defaultPipeline) handleMessage(ctx context.Context, msg Message) {
 	}
 
 	// Approval gate: unapproved users are silently ignored
+	p.logger.Info("approval check",
+		"user_id", msg.UserID,
+		"require_approval", p.requireApproval,
+		"user_approved", enriched.User.Approved,
+		"is_root", enriched.IsRoot,
+		"effective_approved", enriched.Approved,
+	)
 	if p.requireApproval && !enriched.Approved {
 		p.logger.Info("message ignored, user not approved",
 			"user_id", msg.UserID,
