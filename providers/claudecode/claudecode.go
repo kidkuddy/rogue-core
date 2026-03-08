@@ -56,7 +56,10 @@ func (p *Provider) Execute(ctx context.Context, req core.AgentRequest) (*core.Ag
 
 	// Tool filtering
 	if len(req.Tools) == 0 {
-		args = append(args, "--allowedTools", "")
+		// No powers = no tools. --allowedTools doesn't block builtins, so use --disallowedTools.
+		args = append(args, "--disallowedTools",
+			"Bash", "Edit", "Write", "Read", "Glob", "Grep",
+			"Agent", "NotebookEdit", "WebFetch", "WebSearch")
 	} else {
 		args = append(args, "--allowedTools")
 		args = append(args, req.Tools...)
