@@ -31,9 +31,12 @@ func (p *defaultPipeline) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Start Schedule (tick loop emits to Telepath's inbound)
-	// Schedule needs its own inbound channel — in a real impl this would be
-	// the same channel Telepath uses. For now, Schedule is a no-op stub.
+	// Start Schedule — emits to the same inbound channel as sources
+	if inboundChan, ok := p.telepath.(interface{ InboundChan() chan<- Message }); ok {
+		if err := p.schedule.Start(ctx, inboundChan.InboundChan()); err != nil {
+			return err
+		}
+	}
 
 	// Main message loop
 	go p.loop(ctx)

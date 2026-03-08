@@ -127,12 +127,18 @@ func (w *defaultWarp) ensureUsageSchema() *sql.DB {
 	if err != nil {
 		return nil
 	}
+	// Schema matches Helmet's usage_stats table
 	db.Exec(`CREATE TABLE IF NOT EXISTS usage_stats (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		chat_id TEXT NOT NULL,
-		user_id TEXT NOT NULL,
-		agent_id TEXT NOT NULL,
-		source_id TEXT NOT NULL,
+		timestamp DATETIME DEFAULT (datetime('now')),
+		user_id TEXT,
+		channel_id TEXT,
+		agent_id TEXT,
+		chat_id TEXT,
+		source_id TEXT,
+		message_type TEXT DEFAULT 'message',
+		powers TEXT DEFAULT '',
+		tags TEXT DEFAULT '',
 		input_tokens INTEGER DEFAULT 0,
 		output_tokens INTEGER DEFAULT 0,
 		cache_read_tokens INTEGER DEFAULT 0,
@@ -140,9 +146,8 @@ func (w *defaultWarp) ensureUsageSchema() *sql.DB {
 		cost_usd REAL DEFAULT 0,
 		duration_ms INTEGER DEFAULT 0,
 		num_turns INTEGER DEFAULT 0,
-		hit_max_turns BOOLEAN DEFAULT FALSE,
-		tags TEXT DEFAULT '',
-		created_at DATETIME DEFAULT (datetime('now'))
+		hit_max_turns BOOLEAN DEFAULT 0,
+		session_state TEXT DEFAULT ''
 	)`)
 	return db
 }
@@ -156,16 +161,16 @@ func (w *defaultWarp) recordUsage(msg *EnrichedMessage, result *AgentResult) {
 	tagsStr := strings.Join(msg.Tags, ",")
 
 	_, err := db.Exec(`INSERT INTO usage_stats
-		(chat_id, user_id, agent_id, source_id, input_tokens, output_tokens,
-		 cache_read_tokens, cache_write_tokens, cost_usd, duration_ms,
-		 num_turns, hit_max_turns, tags, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		msg.ChatID, msg.UserID, msg.Agent.ID, msg.SourceID,
-		result.Usage.InputTokens, result.Usage.OutputTokens,
+		(timestamp, user_id, channel_id, agent_id, chat_id, source_id,
+		 tags, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+		 cost_usd, duration_ms, num_turns, hit_max_turns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format("2006-01-02 15:04:05"),
+		msg.UserID, msg.ChannelID, msg.Agent.ID, msg.ChatID, msg.SourceID,
+		tagsStr, result.Usage.InputTokens, result.Usage.OutputTokens,
 		result.Usage.CacheReadTokens, result.Usage.CacheWriteTokens,
 		result.Usage.CostUSD, result.Usage.DurationMS,
 		result.Usage.NumTurns, result.HitMaxTurns,
-		tagsStr, time.Now().UTC().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		w.logger.Warn("failed to record usage", "error", err)
@@ -205,7 +210,7 @@ func QueryUsage(store Store, since time.Time, tags ...string) (*UsageSummary, er
 		COALESCE(SUM(output_tokens), 0),
 		COALESCE(SUM(num_turns), 0),
 		COUNT(*)
-		FROM usage_stats WHERE created_at >= ?`
+		FROM usage_stats WHERE timestamp >= ?`
 
 	args := []any{since.UTC().Format("2006-01-02 15:04:05")}
 

@@ -46,6 +46,11 @@ func (t *defaultTelepath) Inbound() <-chan Message {
 	return t.inbound
 }
 
+// InboundChan returns a writable channel for Schedule to emit messages into.
+func (t *defaultTelepath) InboundChan() chan<- Message {
+	return t.inbound
+}
+
 func (t *defaultTelepath) Outbound(ctx context.Context, resp Response) error {
 	t.mu.RLock()
 	src, ok := t.sources[resp.TargetSource]
