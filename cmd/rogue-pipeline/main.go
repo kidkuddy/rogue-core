@@ -104,9 +104,8 @@ func runFromConfig(cfg *core.Config, logger *slog.Logger) {
 
 	// Pipeline
 	var pipelineOpts []core.PipelineOption
-	if cfg.Helmet.RequireApproval {
-		pipelineOpts = append(pipelineOpts, core.WithRequireApprovalGate(true))
-	}
+	requireApproval := cfg.Helmet.RequireApproval == nil || *cfg.Helmet.RequireApproval
+	pipelineOpts = append(pipelineOpts, core.WithRequireApprovalGate(requireApproval))
 	pipeline := core.NewPipeline(telepath, helmet, cerebro, warp, schedule, logger, pipelineOpts...)
 
 	ctx, cancel := context.WithCancel(context.Background())
