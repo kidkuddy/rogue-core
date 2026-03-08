@@ -13,12 +13,10 @@ sources/          — message source adapters (telegram, cli, agent)
 cmd/
   rogue-pipeline/     — main binary, runs the message loop
   rogue-coordinator/  — process supervisor (hot reload, crash recovery)
+tools/
   rogue-store/        — MCP server: namespaced DB + file access
   rogue-scheduler/    — MCP server: task scheduling
   rogue-iam/          — MCP server: usage/power/user queries
-tools/            — instance-specific MCP servers (migrating from v2)
-agents/           — agent persona files (.md)
-powers/           — capability bundles (.md with YAML frontmatter)
 ```
 
 ## Component Codenames

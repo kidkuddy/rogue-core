@@ -1,14 +1,18 @@
 .PHONY: build clean test
 
-BINARIES = rogue-pipeline rogue-coordinator rogue-store rogue-scheduler rogue-iam
+CMD_BINARIES = rogue-pipeline rogue-coordinator
+TOOL_BINARIES = rogue-store rogue-scheduler rogue-iam
 
-build: $(BINARIES)
+build: $(CMD_BINARIES) $(TOOL_BINARIES)
 
-rogue-%: cmd/rogue-%/main.go
+rogue-pipeline rogue-coordinator: rogue-%: cmd/rogue-%/main.go
 	go build -o $@ ./cmd/$@
+
+rogue-store rogue-scheduler rogue-iam: rogue-%: tools/rogue-%/main.go
+	go build -o $@ ./tools/$@
 
 test:
 	go test ./... -count=1
 
 clean:
-	rm -f $(BINARIES)
+	rm -f $(CMD_BINARIES) $(TOOL_BINARIES)

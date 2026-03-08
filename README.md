@@ -23,9 +23,10 @@ sources/        — message source adapters (telegram, cli, agent-to-agent)
 cmd/            — binaries
   rogue-pipeline/     — main message loop
   rogue-coordinator/  — process supervisor (hot reload, crash recovery)
-  rogue-store/        — storage MCP server
-  rogue-iam/          — IAM MCP server
-  rogue-scheduler/    — scheduler MCP server
+tools/          — MCP servers
+  rogue-store/        — namespaced DB + file access
+  rogue-scheduler/    — task scheduling
+  rogue-iam/          — usage, powers, users
 ```
 
 ## usage
