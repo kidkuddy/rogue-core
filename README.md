@@ -41,7 +41,7 @@ your instance repo has your agents, power sets, custom tools, and a `config.yaml
 ```
 my-instance/
 ├── agents/        — agent persona files (.md)
-├── power_sets/    — capability bundles (.md)
+├── powers/    — capability bundles (.md)
 ├── tools/         — your custom MCP servers
 ├── config.yaml    — wires everything together
 └── go.mod         — requires rogue-core

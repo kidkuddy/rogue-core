@@ -18,7 +18,7 @@ cmd/
   rogue-iam/          — MCP server: usage/power/user queries
 tools/            — instance-specific MCP servers (migrating from v2)
 agents/           — agent persona files (.md)
-power_sets/       — capability bundles (.md with YAML frontmatter)
+powers/           — capability bundles (.md with YAML frontmatter)
 ```
 
 ## Component Codenames
@@ -48,7 +48,7 @@ YAML with `"env:VAR"` and `"${VAR}"` substitution. See `core/config.go`.
 `helmet.require_approval` defaults to `true`. New users get `approved=false`. Root always bypasses. Set `require_approval: false` to let everyone through.
 
 ### Powers
-Power set files in `power_sets/` with YAML frontmatter (name, tools, directories) and markdown body (instructions). Granted per user+agent+channel via `user_powers` table.
+Power set files in `powers/` with YAML frontmatter (name, tools, directories) and markdown body (instructions). Granted per user+agent+channel via `user_powers` table.
 
 ### MCP tools
 mcp-go v0.45. Use `req.GetArguments()["key"]` not `req.Params.Arguments["key"]`.
@@ -63,9 +63,6 @@ make clean    # rm binaries
 
 Go is not Rust — no `--release` flag. Just `go build` / `go test`.
 
-## Migration Status
-
-See `MIGRATION_NOTES.md` for the v2 → rogue-core migration tracker. Each MCP tool, agent, and power set is documented with schemas, Store patterns, and gotchas.
 
 ## Commit Convention
 
