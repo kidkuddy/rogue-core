@@ -55,10 +55,10 @@ func (p *Provider) Execute(ctx context.Context, req core.AgentRequest) (*core.Ag
 	}
 
 	// Tool filtering
-	args = append(args, "--allowedTools")
 	if len(req.Tools) == 0 {
-		args = append(args, "__none__")
+		args = append(args, "--allowedTools", "")
 	} else {
+		args = append(args, "--allowedTools")
 		args = append(args, req.Tools...)
 	}
 
