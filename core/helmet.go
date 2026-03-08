@@ -107,7 +107,7 @@ func (h *defaultHelmet) Process(ctx context.Context, msg Message) (*EnrichedMess
 	agent := h.loadAgent(msg.AgentID)
 
 	// 6. Resolve powers and build powerset
-	powerSet, err := h.resolvePowerSet(db, msg.AgentID, msg.UserID, msg.ChannelID)
+	powerSet, err := h.resolvePowerSet(db, msg.AgentID, msg.UserID, msg.ChannelID, isRoot)
 	if err != nil {
 		h.logger.Error("power resolution failed", "error", err)
 		powerSet = PowerSet{}
@@ -348,7 +348,7 @@ func (h *defaultHelmet) loadPower(name string) (*Power, error) {
 	return power, nil
 }
 
-func (h *defaultHelmet) resolvePowerSet(db *sql.DB, agentID, userID, channelID string) (PowerSet, error) {
+func (h *defaultHelmet) resolvePowerSet(db *sql.DB, agentID, userID, channelID string, isRoot bool) (PowerSet, error) {
 	rows, err := db.Query(
 		"SELECT DISTINCT power_name FROM user_powers WHERE agent_id = ? AND user_id = ? AND channel_id = ?",
 		agentID, userID, channelID)
@@ -378,6 +378,11 @@ func (h *defaultHelmet) resolvePowerSet(db *sql.DB, agentID, userID, channelID s
 				powerNames = append(powerNames, name)
 			}
 		}
+	}
+
+	// Root always gets the "powers" power
+	if isRoot {
+		powerNames = append(powerNames, "powers")
 	}
 
 	// Deduplicate

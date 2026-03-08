@@ -47,9 +47,30 @@ func main() {
 		mcp.WithString("agent_id", mcp.Description("Filter by agent ID")),
 	), handlePowerList)
 
+	s.AddTool(mcp.NewTool("power_grant",
+		mcp.WithDescription("Grant a power to a user for a specific agent. Use channel_id='' for global (all channels)."),
+		mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to grant power to")),
+		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent ID scope (e.g. 'rogue', 'doom')")),
+		mcp.WithString("power_name", mcp.Required(), mcp.Description("Power name to grant (e.g. 'memory', 'scratchpad')")),
+		mcp.WithString("channel_id", mcp.Description("Channel ID scope. Empty string = global (all channels).")),
+	), handlePowerGrant)
+
+	s.AddTool(mcp.NewTool("power_revoke",
+		mcp.WithDescription("Revoke a power from a user."),
+		mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to revoke power from")),
+		mcp.WithString("agent_id", mcp.Required(), mcp.Description("Agent ID scope")),
+		mcp.WithString("power_name", mcp.Required(), mcp.Description("Power name to revoke")),
+		mcp.WithString("channel_id", mcp.Description("Channel ID scope. Empty string = global.")),
+	), handlePowerRevoke)
+
 	s.AddTool(mcp.NewTool("user_list",
 		mcp.WithDescription("List all known users."),
 	), handleUserList)
+
+	s.AddTool(mcp.NewTool("user_approve",
+		mcp.WithDescription("Approve a user so they can interact with the bot."),
+		mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to approve")),
+	), handleUserApprove)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
@@ -135,6 +156,70 @@ func handleUsageRecent(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 
 	out, _ := json.MarshalIndent(entries, "", "  ")
 	return mcp.NewToolResultText(string(out)), nil
+}
+
+func handlePowerGrant(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	userID, _ := args["user_id"].(string)
+	agentID, _ := args["agent_id"].(string)
+	powerName, _ := args["power_name"].(string)
+	channelID, _ := args["channel_id"].(string)
+
+	if userID == "" || agentID == "" || powerName == "" {
+		return mcp.NewToolResultError("user_id, agent_id, and power_name are required"), nil
+	}
+
+	db, err := store.Namespace("iam").DB()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+	}
+
+	assignedBy := os.Getenv("ROGUE_USER_ID")
+	_, err = db.Exec(`
+		INSERT INTO user_powers (agent_id, user_id, channel_id, power_name, assigned_by)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id, user_id, channel_id, power_name)
+		DO UPDATE SET assigned_by = excluded.assigned_by, assigned_at = datetime('now')
+	`, agentID, userID, channelID, powerName, assignedBy)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("grant failed: %v", err)), nil
+	}
+
+	scope := "global"
+	if channelID != "" {
+		scope = "channel:" + channelID
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Granted power '%s' to user %s for agent %s (scope: %s)", powerName, userID, agentID, scope)), nil
+}
+
+func handlePowerRevoke(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	userID, _ := args["user_id"].(string)
+	agentID, _ := args["agent_id"].(string)
+	powerName, _ := args["power_name"].(string)
+	channelID, _ := args["channel_id"].(string)
+
+	if userID == "" || agentID == "" || powerName == "" {
+		return mcp.NewToolResultError("user_id, agent_id, and power_name are required"), nil
+	}
+
+	db, err := store.Namespace("iam").DB()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+	}
+
+	result, err := db.Exec(
+		"DELETE FROM user_powers WHERE agent_id = ? AND user_id = ? AND channel_id = ? AND power_name = ?",
+		agentID, userID, channelID, powerName)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("revoke failed: %v", err)), nil
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("No matching grant found for power '%s'", powerName)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Revoked power '%s' from user %s for agent %s", powerName, userID, agentID)), nil
 }
 
 func handlePowerList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -223,4 +308,27 @@ func handleUserList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResu
 
 	out, _ := json.MarshalIndent(users, "", "  ")
 	return mcp.NewToolResultText(string(out)), nil
+}
+
+func handleUserApprove(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	userID, _ := req.GetArguments()["user_id"].(string)
+	if userID == "" {
+		return mcp.NewToolResultError("user_id is required"), nil
+	}
+
+	db, err := store.Namespace("iam").DB()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+	}
+
+	result, err := db.Exec("UPDATE users SET approved = 1 WHERE id = ?", userID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("approve failed: %v", err)), nil
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return mcp.NewToolResultText(fmt.Sprintf("User %s not found", userID)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("User %s approved", userID)), nil
 }
