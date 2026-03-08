@@ -370,27 +370,45 @@ This violates the rogue-core architecture where tools are AI-agnostic and the ag
 
 ### rogue
 - **Role**: External Te — decision maker, executor, boundary enforcer
-- **Persona**: Southern drawl tics, 1-3 sentence responses, max 3 active contexts, no silent deletions
+- **Persona**: Southern drawl tics, 1-3 sentence responses, no silent deletions
 - **Powers typically granted**: admin (all tools)
-- **Migration notes**: Copy as-is. The persona references tool behaviors but not specific implementations.
+- **Prompt status**: Cleaned. Removed tool-dependent sections (contexts/items, talks, brain dumps, task thresholds). Core personality and decision-making intact.
+- **Sections removed and why**:
+  - "Contexts & Items" — depends on memory/threads tools (context_create, item_create, etc.)
+  - "Talks (Fi Processing)" — depends on memory tools to store/retrieve talk resolutions
+  - "Brain Dumps" — "map to contexts... store cleanly" requires context/item tools
+  - "Task Overload" threshold (≥30 tasks) — can't count tasks without tools
+  - "Stagnation" threshold (14+ days inactive) — can't check timestamps without tools
+  - "Remember what they forget" — removed from role (needs tools to remember)
+  - First interaction "if no contexts or items exist" — can't check without tools
+- **Re-add when**: `memory` and `threads` powers are integrated. Add sections back to the power set instructions, not the base prompt.
 
 ### doom
 - **Role**: PhD researcher — literature review, gap analysis, methodology critique
 - **Persona**: Doctor Doom persona, cold authority, deploys "Doombots" via teams
 - **Powers typically granted**: phd, memory, scheduler, teams
-- **Migration notes**: Copy as-is. References "Latveria" team and "Doombots" (teammates). The team orchestration uses Claude Code's native team feature, not rogue-specific code. The PHD LLM removal will change Doom's workflow — currently the tools do screening, post-migration Doom does the thinking and records decisions.
+- **Prompt status**: Cleaned. Tool-dependent sections converted to conditional blocks ("if you have access to X tools... else..."). Core research mentoring and personality intact without tools.
+- **Conditional sections**:
+  - "PHD Research Tools" — if phd tools available, use them; else give verbal guidance and note lack of access
+  - "Latveria & Doombots" — if team tools available, spawn latveria team; else suggest sequential manual steps
+  - "Scheduler" — if scheduler available, schedule follow-ups; else tell user to set a timer
+- **Re-add full functionality when**: `phd`, `teams`, `scheduler` powers are integrated.
 
 ### magik
 - **Role**: Orchestrator — decomposes problems, deploys agent teams, coordinates
 - **Persona**: Russian tics, cold precision, no tables ever, spawns "demons" (teammates)
 - **Powers typically granted**: builder, teams, memory
-- **Migration notes**: Copy as-is. References "Limbo" team and demon spawning. Same team mechanism as Doom.
+- **Prompt status**: Cleaned. Same conditional pattern as Doom. Without team tools, Magik still decomposes problems but gives the breakdown as plain text instead of spawning agents.
+- **Conditional sections**:
+  - "Teams & Demons" — if team tools available, spawn demons team; else give decomposition as text and tell user to run manually
+  - "Scheduler" — if scheduler available, schedule follow-ups; else tell user to set a timer
+- **Re-add full functionality when**: `teams`, `scheduler` powers are integrated.
 
 ### psylocke
 - **Role**: External Ni — foresight, convergence, cuts noise, strikes at essence
 - **Persona**: Sparse piercing sentences, eliminates options
 - **Powers typically granted**: readonly, scout
-- **Migration notes**: Copy as-is. Minimal tool usage, mostly conversational.
+- **Prompt status**: No changes needed. Entirely conversational, no tool dependencies.
 
 ### emma
 - **Role**: Inner strategist — power dynamics, boundary setting, dignity
