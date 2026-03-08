@@ -48,7 +48,7 @@ type coordinator struct {
 
 func (c *coordinator) Run() {
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGUSR1)
 
 	c.logger.Info("coordinator starting",
 		"pipeline", c.pipelineBin,
@@ -72,6 +72,9 @@ func (c *coordinator) Run() {
 		select {
 		case sig := <-sigCh:
 			switch sig {
+			case syscall.SIGUSR1:
+				c.logger.Info("SIGUSR1 received, forwarding config reload to pipeline")
+				c.forwardSignal(syscall.SIGUSR1)
 			case syscall.SIGHUP:
 				c.logger.Info("SIGHUP received, restarting pipeline")
 				c.restartPipeline()
@@ -175,6 +178,21 @@ func (c *coordinator) restartPipeline() {
 	c.stopPipeline()
 	if err := c.startPipeline(); err != nil {
 		c.logger.Error("failed to restart pipeline", "error", err)
+	}
+}
+
+func (c *coordinator) forwardSignal(sig os.Signal) {
+	c.mu.Lock()
+	cmd := c.cmd
+	c.mu.Unlock()
+
+	if cmd == nil || cmd.Process == nil {
+		c.logger.Warn("no pipeline process to forward signal to")
+		return
+	}
+
+	if err := cmd.Process.Signal(sig); err != nil {
+		c.logger.Warn("failed to forward signal", "signal", sig, "error", err)
 	}
 }
 

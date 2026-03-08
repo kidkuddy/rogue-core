@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
 type defaultSchedule struct {
@@ -308,42 +310,16 @@ func (s *defaultSchedule) Delay(taskID string, duration time.Duration) error {
 
 // --- Cron ---
 
-// nextCronTime computes the next fire time from a simple cron expression.
-// Supports: "minute hour dom month dow" (5-field cron).
-// For simplicity, only supports exact values and wildcards (*).
-// A full cron parser can be swapped in later.
+// nextCronTime computes the next fire time from a cron expression using robfig/cron.
+// Supports standard 5-field cron: "minute hour dom month dow".
 func nextCronTime(expr string, from time.Time) time.Time {
-	// Simple: just add 24 hours for daily, 1 hour for hourly, etc.
-	// This is a placeholder — a real cron parser (like robfig/cron) should replace this.
-	parts := splitFields(expr)
-	if len(parts) != 5 {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse(expr)
+	if err != nil {
+		// Fallback: 24 hours from now
 		return from.Add(24 * time.Hour)
 	}
-
-	// Check for common patterns
-	allStar := true
-	for _, p := range parts {
-		if p != "*" {
-			allStar = false
-			break
-		}
-	}
-	if allStar {
-		return from.Add(1 * time.Minute) // every minute
-	}
-
-	// Minute specified, rest *: hourly
-	if parts[0] != "*" && parts[1] == "*" {
-		return from.Add(1 * time.Hour)
-	}
-
-	// Hour and minute specified, rest *: daily
-	if parts[0] != "*" && parts[1] != "*" && parts[2] == "*" {
-		return from.Add(24 * time.Hour)
-	}
-
-	// Default: daily
-	return from.Add(24 * time.Hour)
+	return schedule.Next(from)
 }
 
 // parseTime tries multiple SQLite datetime formats.
@@ -361,21 +337,3 @@ func parseTime(s string) time.Time {
 	return time.Time{}
 }
 
-func splitFields(s string) []string {
-	var fields []string
-	field := ""
-	for _, c := range s {
-		if c == ' ' || c == '\t' {
-			if field != "" {
-				fields = append(fields, field)
-				field = ""
-			}
-		} else {
-			field += string(c)
-		}
-	}
-	if field != "" {
-		fields = append(fields, field)
-	}
-	return fields
-}
