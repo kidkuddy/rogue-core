@@ -32,8 +32,8 @@ func (s *sqliteStore) Namespace(name string) Namespace {
 	return &sqliteNamespace{
 		store:   s,
 		name:    name,
-		dbDir:   filepath.Join(s.dataDir, "db", name),
-		fileDir: filepath.Join(s.dataDir, "files", name),
+		dbDir:   filepath.Join(s.dataDir, name, "db"),
+		fileDir: filepath.Join(s.dataDir, name, "files"),
 		logger:  s.logger,
 	}
 }

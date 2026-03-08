@@ -147,14 +147,20 @@ func execStatement(db *sql.DB, query string) (*mcp.CallToolResult, error) {
 
 func handleDBList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	dataDir := os.Getenv("ROGUE_DATA")
-	entries, err := os.ReadDir(fmt.Sprintf("%s/db", dataDir))
+	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return mcp.NewToolResultText("[]"), nil
 	}
 
 	var namespaces []string
 	for _, e := range entries {
-		if e.IsDir() {
+		if !e.IsDir() {
+			continue
+		}
+		// A namespace has a db/ or files/ subdirectory
+		dbPath := fmt.Sprintf("%s/%s/db", dataDir, e.Name())
+		filesPath := fmt.Sprintf("%s/%s/files", dataDir, e.Name())
+		if dirExists(dbPath) || dirExists(filesPath) {
 			namespaces = append(namespaces, e.Name())
 		}
 	}
@@ -210,6 +216,11 @@ func handleFileList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 
 	out, _ := json.MarshalIndent(entries, "", "  ")
 	return mcp.NewToolResultText(string(out)), nil
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func handleBackup(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {

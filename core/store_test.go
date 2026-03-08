@@ -47,10 +47,10 @@ func TestStoreNamespaceIsolation(t *testing.T) {
 	}
 
 	// Verify separate db files exist
-	if _, err := os.Stat(filepath.Join(dir, "db", "iam", "store.sqlite")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "iam", "db", "store.sqlite")); err != nil {
 		t.Fatalf("ns1 db file missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "db", "power:memory", "store.sqlite")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "power:memory", "db", "store.sqlite")); err != nil {
 		t.Fatalf("ns2 db file missing: %v", err)
 	}
 }
@@ -115,7 +115,7 @@ func TestStoreFileOperations(t *testing.T) {
 	}
 
 	// Verify files are in correct namespace directory
-	expectedDir := filepath.Join(dir, "files", "power:memory")
+	expectedDir := filepath.Join(dir, "power:memory", "files")
 	if _, err := os.Stat(filepath.Join(expectedDir, "notes", "todo.txt")); err != nil {
 		t.Errorf("file not in expected location: %v", err)
 	}

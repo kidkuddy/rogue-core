@@ -33,9 +33,10 @@ tools/
 
 ### Store namespaces
 ```go
-store.Namespace("iam").DB()           // $ROGUE_DATA/db/iam/store.sqlite
-store.Namespace("scheduler").DB()     // $ROGUE_DATA/db/scheduler/store.sqlite
-store.Namespace("contacts").DB()      // $ROGUE_DATA/db/contacts/store.sqlite
+store.Namespace("iam").DB()           // $ROGUE_DATA/iam/db/store.sqlite
+store.Namespace("scheduler").DB()     // $ROGUE_DATA/scheduler/db/store.sqlite
+store.Namespace("contacts").DB()      // $ROGUE_DATA/contacts/db/store.sqlite
+// Files: $ROGUE_DATA/<namespace>/files/
 ```
 Dynamic — any string works. DB created on first access.
 
