@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -67,7 +70,7 @@ func main() {
 	), handleFileDelete)
 
 	s.AddTool(mcp.NewTool("backup",
-		mcp.WithDescription("Run a WAL checkpoint across all databases."),
+		mcp.WithDescription("Back up the entire data folder. Checkpoints all databases first, then copies everything to a timestamped backup directory."),
 	), handleBackup)
 
 	if err := server.ServeStdio(s); err != nil {
@@ -257,38 +260,105 @@ func dirExists(path string) bool {
 
 func handleBackup(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	dataDir := os.Getenv("ROGUE_DATA")
+	if dataDir == "" {
+		return mcp.NewToolResultError("ROGUE_DATA not set"), nil
+	}
+
+	// Step 1: WAL checkpoint all databases for consistency
+	var checkpointed []string
+	var errs []string
+
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("read data dir: %v", err)), nil
 	}
 
-	var checkpointed []string
-	var errors []string
-
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		dbPath := fmt.Sprintf("%s/%s/db/store.sqlite", dataDir, e.Name())
+		dbPath := filepath.Join(dataDir, e.Name(), "db", "store.sqlite")
 		if _, err := os.Stat(dbPath); err != nil {
 			continue
 		}
 		db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: open failed: %v", e.Name(), err))
+			errs = append(errs, fmt.Sprintf("%s: open failed: %v", e.Name(), err))
 			continue
 		}
 		if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-			errors = append(errors, fmt.Sprintf("%s: checkpoint failed: %v", e.Name(), err))
+			errs = append(errs, fmt.Sprintf("%s: checkpoint failed: %v", e.Name(), err))
 		} else {
 			checkpointed = append(checkpointed, e.Name())
 		}
 		db.Close()
 	}
 
-	result := fmt.Sprintf("Checkpointed %d databases: %s", len(checkpointed), strings.Join(checkpointed, ", "))
-	if len(errors) > 0 {
-		result += fmt.Sprintf("\nErrors: %s", strings.Join(errors, "; "))
+	// Step 2: Copy entire data folder to timestamped backup
+	timestamp := time.Now().Format("2006-01-02_150405")
+	backupDir := dataDir + "_backup_" + timestamp
+
+	if err := copyDir(dataDir, backupDir); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("backup copy failed: %v", err)), nil
+	}
+
+	result := fmt.Sprintf("Backup complete → %s\nCheckpointed %d databases: %s",
+		backupDir, len(checkpointed), strings.Join(checkpointed, ", "))
+	if len(errs) > 0 {
+		result += fmt.Sprintf("\nCheckpoint errors: %s", strings.Join(errs, "; "))
 	}
 	return mcp.NewToolResultText(result), nil
+}
+
+func copyDir(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, e := range entries {
+		srcPath := filepath.Join(src, e.Name())
+		dstPath := filepath.Join(dst, e.Name())
+
+		if e.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
 }

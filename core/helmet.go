@@ -197,6 +197,10 @@ func (h *defaultHelmet) ensureSchema(db *sql.DB) error {
 			last_seen DATETIME DEFAULT (datetime('now')),
 			UNIQUE(user_id, source_id, channel_id)
 		);
+		CREATE TABLE IF NOT EXISTS user_aliases (
+			alias TEXT PRIMARY KEY COLLATE NOCASE,
+			user_id TEXT NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS usage_stats (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			timestamp DATETIME DEFAULT (datetime('now')),

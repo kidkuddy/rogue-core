@@ -82,6 +82,21 @@ func main() {
 		mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to unblock")),
 	), handleUserUnblock)
 
+	s.AddTool(mcp.NewTool("alias_set",
+		mcp.WithDescription("Set a nickname for a user. Use this to map a human name to a user ID."),
+		mcp.WithString("alias", mcp.Required(), mcp.Description("Nickname (e.g. 'john', 'mom'). Case-insensitive.")),
+		mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to map to")),
+	), handleAliasSet)
+
+	s.AddTool(mcp.NewTool("alias_resolve",
+		mcp.WithDescription("Resolve a nickname to a user ID."),
+		mcp.WithString("alias", mcp.Required(), mcp.Description("Nickname to look up")),
+	), handleAliasResolve)
+
+	s.AddTool(mcp.NewTool("alias_list",
+		mcp.WithDescription("List all user aliases."),
+	), handleAliasList)
+
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		os.Exit(1)
@@ -392,4 +407,79 @@ func handleUserUnblock(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 		return mcp.NewToolResultText(fmt.Sprintf("User %s not found", userID)), nil
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("User %s unblocked", userID)), nil
+}
+
+func handleAliasSet(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	alias, _ := args["alias"].(string)
+	userID, _ := args["user_id"].(string)
+
+	if alias == "" || userID == "" {
+		return mcp.NewToolResultError("alias and user_id are required"), nil
+	}
+
+	db, err := store.Namespace("iam").DB()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+	}
+
+	_, err = db.Exec(`INSERT INTO user_aliases (alias, user_id) VALUES (?, ?)
+		ON CONFLICT(alias) DO UPDATE SET user_id = excluded.user_id`, alias, userID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("set alias failed: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Alias '%s' → %s", alias, userID)), nil
+}
+
+func handleAliasResolve(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	alias, _ := req.GetArguments()["alias"].(string)
+	if alias == "" {
+		return mcp.NewToolResultError("alias is required"), nil
+	}
+
+	db, err := store.Namespace("iam").DB()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+	}
+
+	var userID string
+	err = db.QueryRow("SELECT user_id FROM user_aliases WHERE alias = ?", alias).Scan(&userID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("alias '%s' not found", alias)), nil
+	}
+
+	return mcp.NewToolResultText(userID), nil
+}
+
+func handleAliasList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	db, err := store.Namespace("iam").DB()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+	}
+
+	rows, err := db.Query("SELECT alias, user_id FROM user_aliases ORDER BY alias")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("query error: %v", err)), nil
+	}
+	defer rows.Close()
+
+	type entry struct {
+		Alias  string `json:"alias"`
+		UserID string `json:"user_id"`
+	}
+
+	var entries []entry
+	for rows.Next() {
+		var e entry
+		rows.Scan(&e.Alias, &e.UserID)
+		entries = append(entries, e)
+	}
+
+	if entries == nil {
+		entries = []entry{}
+	}
+
+	out, _ := json.MarshalIndent(entries, "", "  ")
+	return mcp.NewToolResultText(string(out)), nil
 }
