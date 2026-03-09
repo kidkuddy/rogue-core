@@ -58,10 +58,13 @@ func (s *defaultSchedule) ensureSchema() *sql.DB {
 		reply BOOLEAN DEFAULT TRUE,
 		queue TEXT DEFAULT '',
 		status TEXT DEFAULT 'pending',
+		requires_ack BOOLEAN DEFAULT FALSE,
 		tags TEXT DEFAULT '[]',
 		created_at DATETIME DEFAULT (datetime('now')),
 		updated_at DATETIME DEFAULT (datetime('now'))
 	)`)
+	// Migration for existing DBs
+	db.Exec("ALTER TABLE tasks ADD COLUMN requires_ack BOOLEAN DEFAULT FALSE")
 	return db
 }
 
@@ -102,7 +105,7 @@ func (s *defaultSchedule) processDueTasks(ctx context.Context, db *sql.DB, bus c
 
 	rows, err := db.Query(`
 		SELECT id, agent_id, user_id, channel_id, source_id, message_text,
-		       scheduled_for, cron_expr, reply, queue, tags
+		       scheduled_for, cron_expr, reply, queue, requires_ack, tags
 		FROM tasks
 		WHERE status = 'pending' AND scheduled_for <= ?
 		ORDER BY scheduled_for ASC
@@ -122,7 +125,7 @@ func (s *defaultSchedule) processDueTasks(ctx context.Context, db *sql.DB, bus c
 		err := rows.Scan(
 			&task.ID, &task.AgentID, &task.UserID, &task.ChannelID,
 			&task.SourceID, &task.MessageText, &scheduledForStr,
-			&task.CronExpr, &reply, &task.Queue, &tagsJSON,
+			&task.CronExpr, &reply, &task.Queue, &task.RequiresAck, &tagsJSON,
 		)
 		if err != nil {
 			s.logger.Warn("failed to scan task", "error", err)
@@ -142,10 +145,16 @@ func (s *defaultSchedule) processDueTasks(ctx context.Context, db *sql.DB, bus c
 			"text_len", len(task.MessageText),
 		)
 
-		// Emit message to bus
+		// Emit message to bus — use the original source_id so the response
+		// routes back through the correct source (e.g., telegram:rogue)
+		sourceID := task.SourceID
+		if sourceID == "" {
+			sourceID = "scheduler"
+		}
+
 		msg := Message{
 			ID:        fmt.Sprintf("sched-%s", task.ID),
-			SourceID:  "scheduler",
+			SourceID:  sourceID,
 			AgentID:   task.AgentID,
 			ChannelID: task.ChannelID,
 			UserID:    task.UserID,
@@ -153,16 +162,19 @@ func (s *defaultSchedule) processDueTasks(ctx context.Context, db *sql.DB, bus c
 			Text:      task.MessageText,
 			Reply:     task.Reply,
 			Metadata: map[string]any{
-				"task_id":   task.ID,
-				"queue":     task.Queue,
-				"source_id": task.SourceID,
+				"task_id": task.ID,
+				"queue":   task.Queue,
 			},
 		}
 
 		select {
 		case bus <- msg:
-			// Mark done (or reschedule cron)
-			if task.CronExpr != "" {
+			if task.RequiresAck {
+				// Task needs user acknowledgment before it's considered done.
+				// Cron tasks with requires_ack will NOT reschedule until ACK'd.
+				db.Exec(`UPDATE tasks SET status = 'awaiting_ack', updated_at = datetime('now') WHERE id = ?`, task.ID)
+				s.logger.Info("task awaiting ack", "task_id", task.ID)
+			} else if task.CronExpr != "" {
 				next := nextCronTime(task.CronExpr, time.Now())
 				db.Exec(`UPDATE tasks SET status = 'pending', scheduled_for = ?, updated_at = datetime('now') WHERE id = ?`,
 					next.UTC().Format("2006-01-02 15:04:05"), task.ID)
@@ -202,12 +214,12 @@ func (s *defaultSchedule) Create(task ScheduledTask) (string, error) {
 
 	_, err := db.Exec(`INSERT INTO tasks
 		(id, agent_id, user_id, channel_id, source_id, message_text,
-		 scheduled_for, cron_expr, reply, queue, status, tags)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 scheduled_for, cron_expr, reply, queue, status, requires_ack, tags)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.AgentID, task.UserID, task.ChannelID,
 		task.SourceID, task.MessageText,
 		task.ScheduledFor.UTC().Format("2006-01-02 15:04:05"),
-		task.CronExpr, task.Reply, task.Queue, task.Status, string(tagsJSON),
+		task.CronExpr, task.Reply, task.Queue, task.Status, task.RequiresAck, string(tagsJSON),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create task: %w", err)
@@ -246,7 +258,7 @@ func (s *defaultSchedule) List(status string) ([]ScheduledTask, error) {
 	}
 
 	query := `SELECT id, agent_id, user_id, channel_id, source_id, message_text,
-		scheduled_for, cron_expr, reply, queue, status, tags
+		scheduled_for, cron_expr, reply, queue, status, requires_ack, tags
 		FROM tasks`
 	var args []any
 
@@ -271,7 +283,7 @@ func (s *defaultSchedule) List(status string) ([]ScheduledTask, error) {
 		err := rows.Scan(
 			&t.ID, &t.AgentID, &t.UserID, &t.ChannelID, &t.SourceID,
 			&t.MessageText, &scheduledForStr, &t.CronExpr, &reply,
-			&t.Queue, &t.Status, &tagsJSON,
+			&t.Queue, &t.Status, &t.RequiresAck, &tagsJSON,
 		)
 		if err != nil {
 			continue
@@ -290,10 +302,13 @@ func (s *defaultSchedule) Delay(taskID string, duration time.Duration) error {
 		return fmt.Errorf("scheduler database unavailable")
 	}
 
+	// Delay works on both pending and awaiting_ack tasks.
+	// For awaiting_ack, it transitions back to pending with a new scheduled_for.
 	res, err := db.Exec(`UPDATE tasks
-		SET scheduled_for = datetime(scheduled_for, '+' || ? || ' seconds'),
+		SET scheduled_for = datetime(COALESCE(scheduled_for, datetime('now')), '+' || ? || ' seconds'),
+		    status = 'pending',
 		    updated_at = datetime('now')
-		WHERE id = ? AND status = 'pending'`,
+		WHERE id = ? AND status IN ('pending', 'awaiting_ack')`,
 		int(duration.Seconds()), taskID)
 	if err != nil {
 		return fmt.Errorf("delay task: %w", err)
@@ -301,10 +316,46 @@ func (s *defaultSchedule) Delay(taskID string, duration time.Duration) error {
 
 	rows, _ := res.RowsAffected()
 	if rows == 0 {
-		return fmt.Errorf("task %s not found or not pending", taskID)
+		return fmt.Errorf("task %s not found or not delayable (must be pending or awaiting_ack)", taskID)
 	}
 
 	s.logger.Info("task delayed", "task_id", taskID, "duration", duration)
+	return nil
+}
+
+func (s *defaultSchedule) Ack(taskID string) error {
+	db := s.ensureSchema()
+	if db == nil {
+		return fmt.Errorf("scheduler database unavailable")
+	}
+
+	// Check current state to decide what to do
+	var status, cronExpr string
+	err := db.QueryRow("SELECT status, cron_expr FROM tasks WHERE id = ?", taskID).Scan(&status, &cronExpr)
+	if err != nil {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	if status != "awaiting_ack" {
+		return fmt.Errorf("task %s is not awaiting acknowledgment (status: %s)", taskID, status)
+	}
+
+	// If cron task, reschedule next run now that it's been ACK'd
+	if cronExpr != "" {
+		next := nextCronTime(cronExpr, time.Now())
+		_, err = db.Exec(`UPDATE tasks SET status = 'pending', scheduled_for = ?, updated_at = datetime('now') WHERE id = ?`,
+			next.UTC().Format("2006-01-02 15:04:05"), taskID)
+		if err != nil {
+			return fmt.Errorf("ack task (reschedule): %w", err)
+		}
+		s.logger.Info("task ack'd and rescheduled", "task_id", taskID, "next", next)
+	} else {
+		_, err = db.Exec(`UPDATE tasks SET status = 'done', updated_at = datetime('now') WHERE id = ?`, taskID)
+		if err != nil {
+			return fmt.Errorf("ack task: %w", err)
+		}
+		s.logger.Info("task ack'd", "task_id", taskID)
+	}
+
 	return nil
 }
 

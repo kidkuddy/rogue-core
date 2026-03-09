@@ -38,10 +38,10 @@ func main() {
 	configDir, _ := filepath.Abs(filepath.Dir(configPath))
 	resolveRelativePaths(cfg, configDir)
 
-	runFromConfig(cfg, logger)
+	runFromConfig(cfg, configDir, logger)
 }
 
-func runFromConfig(cfg *core.Config, logger *slog.Logger) {
+func runFromConfig(cfg *core.Config, configDir string, logger *slog.Logger) {
 	// Store
 	store := core.NewSQLiteStore(cfg.Store.DataDir, logger)
 	defer store.Close()
@@ -93,7 +93,17 @@ func runFromConfig(cfg *core.Config, logger *slog.Logger) {
 	default:
 		provider = &core.StubProvider{Logger: logger}
 	}
-	cerebro := core.NewCerebro(store, provider, mcpRegistry, cfg.Cerebro.MaxTurns, cfg.Cerebro.MaxAgentDepth, logger)
+	// Root prompt config
+	var cerebroOpts []core.CerebroOption
+	useRootPrompt := cfg.Cerebro.RootPrompt == nil || *cfg.Cerebro.RootPrompt
+	prependPersona := cfg.Cerebro.PrependPersona == nil || *cfg.Cerebro.PrependPersona
+	rootPath := cfg.Cerebro.RootPromptPath
+	if rootPath == "" {
+		rootPath = filepath.Join(configDir, "ROOT.md")
+	}
+	cerebroOpts = append(cerebroOpts, core.WithRootPromptConfig(rootPath, useRootPrompt, prependPersona))
+
+	cerebro := core.NewCerebro(store, provider, mcpRegistry, cfg.Cerebro.MaxTurns, cfg.Cerebro.MaxAgentDepth, logger, cerebroOpts...)
 
 	// Warp
 	warp := core.NewWarp(telepath, store, logger)
@@ -178,6 +188,7 @@ func resolveRelativePaths(cfg *core.Config, baseDir string) {
 	cfg.Store.DataDir = resolve(cfg.Store.DataDir)
 	cfg.Helmet.PowersDir = resolve(cfg.Helmet.PowersDir)
 	cfg.Helmet.AgentsDir = resolve(cfg.Helmet.AgentsDir)
+	cfg.Cerebro.RootPromptPath = resolve(cfg.Cerebro.RootPromptPath)
 
 	for name, tool := range cfg.Cerebro.Tools {
 		tool.Command = resolve(tool.Command)

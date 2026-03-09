@@ -42,6 +42,9 @@ type CerebroConfig struct {
 	DefaultProvider string                `yaml:"default_provider"`
 	MaxTurns        int                   `yaml:"max_turns"`
 	MaxAgentDepth   int                   `yaml:"max_agent_depth"`
+	RootPrompt      *bool                 `yaml:"root_prompt"`       // use ROOT.md as base prompt (default true)
+	PrependPersona  *bool                 `yaml:"prepend_persona"`   // prepend agent persona if no {{agent_persona}} placeholder (default true)
+	RootPromptPath  string                `yaml:"root_prompt_path"`  // path to root prompt file (default "ROOT.md")
 	Tools           map[string]ToolConfig `yaml:"tools"`
 }
 

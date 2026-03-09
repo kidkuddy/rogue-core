@@ -43,6 +43,7 @@ func main() {
 		mcp.WithString("source_id", mcp.Description("Source ID for response routing")),
 		mcp.WithString("queue", mcp.Description("Optional queue name to push results to")),
 		mcp.WithBoolean("reply", mcp.Description("Whether to send response back (default true)")),
+		mcp.WithBoolean("requires_ack", mcp.Description("If true, task stays in 'awaiting_ack' after firing until explicitly acknowledged. Cron tasks won't reschedule until ACK'd.")),
 	), handleSchedule)
 
 	s.AddTool(mcp.NewTool("cancel_task",
@@ -52,14 +53,19 @@ func main() {
 
 	s.AddTool(mcp.NewTool("list_tasks",
 		mcp.WithDescription("List scheduled tasks, optionally filtered by status."),
-		mcp.WithString("status", mcp.Description("Filter by status: pending, running, done, failed, cancelled. Empty = all.")),
+		mcp.WithString("status", mcp.Description("Filter by status: pending, running, awaiting_ack, done, failed, cancelled. Empty = all.")),
 	), handleList)
 
 	s.AddTool(mcp.NewTool("delay_task",
-		mcp.WithDescription("Postpone a pending task by a duration."),
+		mcp.WithDescription("Postpone a pending or awaiting_ack task by a duration. Transitions awaiting_ack back to pending."),
 		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task ID to delay")),
 		mcp.WithString("duration", mcp.Required(), mcp.Description("Duration to delay by (e.g. '30m', '2h', '1h30m')")),
 	), handleDelay)
+
+	s.AddTool(mcp.NewTool("ack_task",
+		mcp.WithDescription("Acknowledge a task that is awaiting_ack. One-shot tasks transition to done. Cron tasks reschedule their next run."),
+		mcp.WithString("task_id", mcp.Required(), mcp.Description("Task ID to acknowledge")),
+	), handleAck)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
@@ -86,11 +92,17 @@ func handleSchedule(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 		reply = r
 	}
 
+	requiresAck := false
+	if r, ok := req.GetArguments()["requires_ack"].(bool); ok {
+		requiresAck = r
+	}
+
 	task := core.ScheduledTask{
 		AgentID:      agentID,
 		MessageText:  message,
 		ScheduledFor: scheduledFor,
 		Reply:        reply,
+		RequiresAck:  requiresAck,
 	}
 
 	if v, ok := req.GetArguments()["cron_expr"].(string); ok {
@@ -180,4 +192,16 @@ func handleDelay(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResul
 		return mcp.NewToolResultError(fmt.Sprintf("delay failed: %v", err)), nil
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("Task %s delayed by %s.", taskID, d)), nil
+}
+
+func handleAck(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	taskID, _ := req.GetArguments()["task_id"].(string)
+	if taskID == "" {
+		return mcp.NewToolResultError("task_id is required"), nil
+	}
+
+	if err := schedule.Ack(taskID); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("ack failed: %v", err)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Task %s acknowledged.", taskID)), nil
 }

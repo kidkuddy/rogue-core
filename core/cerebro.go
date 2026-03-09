@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 )
 
 type defaultCerebro struct {
@@ -14,10 +16,34 @@ type defaultCerebro struct {
 	mcpRegistry     MCPRegistry
 	maxTurns        int
 	maxDepth        int
+	rootPrompt      string // loaded ROOT.md content
+	useRootPrompt   bool   // whether to apply ROOT.md (default true)
+	prependPersona  bool   // prepend persona if no {{agent_persona}} (default true)
 	logger          *slog.Logger
 }
 
-func NewCerebro(store Store, defaultProvider AgentProvider, mcpRegistry MCPRegistry, maxTurns int, maxDepth int, logger *slog.Logger) Cerebro {
+// CerebroOption configures cerebro behavior.
+type CerebroOption func(*defaultCerebro)
+
+// WithRootPromptConfig loads ROOT.md and configures template behavior.
+func WithRootPromptConfig(path string, enabled bool, prependPersona bool) CerebroOption {
+	return func(c *defaultCerebro) {
+		c.useRootPrompt = enabled
+		c.prependPersona = prependPersona
+		if !enabled || path == "" {
+			return
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			c.logger.Warn("ROOT.md not found, skipping", "path", path, "error", err)
+			return
+		}
+		c.rootPrompt = strings.TrimSpace(string(data))
+		c.logger.Info("ROOT.md loaded", "path", path, "size", len(c.rootPrompt))
+	}
+}
+
+func NewCerebro(store Store, defaultProvider AgentProvider, mcpRegistry MCPRegistry, maxTurns int, maxDepth int, logger *slog.Logger, opts ...CerebroOption) Cerebro {
 	c := &defaultCerebro{
 		store:           store,
 		providers:       make(map[string]AgentProvider),
@@ -25,9 +51,14 @@ func NewCerebro(store Store, defaultProvider AgentProvider, mcpRegistry MCPRegis
 		mcpRegistry:     mcpRegistry,
 		maxTurns:        maxTurns,
 		maxDepth:        maxDepth,
+		useRootPrompt:   true, // default
+		prependPersona:  true, // default
 		logger:          logger,
 	}
 	c.providers[defaultProvider.ID()] = defaultProvider
+	for _, opt := range opts {
+		opt(c)
+	}
 	return c
 }
 
@@ -65,34 +96,51 @@ func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*Ag
 	// Load conversation state from Store
 	sessionState := c.loadSessionState(msg.ChatID)
 
-	// Generate dynamic MCP config
+	// Build env early so we can pass it to MCP config too
+	sessionEnv := c.buildEnv(msg)
+
+	// Generate dynamic MCP config — pass full session env so MCP tools get
+	// ROGUE_CHANNEL_ID, ROGUE_MESSAGE_ID, TELEGRAM_BOT_TOKEN, etc.
 	var mcpConfigPath string
 	if c.mcpRegistry != nil && len(msg.PowerSet.Tools) > 0 {
 		var err error
-		mcpConfigPath, err = c.mcpRegistry.GenerateConfig(msg.PowerSet.Tools, nil)
+		mcpConfigPath, err = c.mcpRegistry.GenerateConfig(msg.PowerSet.Tools, sessionEnv)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate MCP config: %w", err)
 		}
 	}
 
+	// Prepend session context to instructions so the agent knows who it's talking to
+	sessionContext := fmt.Sprintf(`## Session Context
+
+- **Your agent ID**: %s
+- **User ID**: %s
+- **Channel ID**: %s
+- **Chat ID**: %s`,
+		msg.Agent.ID, msg.UserID, msg.ChannelID, msg.ChatID)
+	instructions := msg.PowerSet.Instructions
+	if instructions != "" {
+		instructions = sessionContext + "\n\n---\n\n" + instructions
+	} else {
+		instructions = sessionContext
+	}
+
+	// Build final persona (apply ROOT.md template if configured)
+	persona := c.buildPersona(msg.Agent.Persona)
+
 	req := AgentRequest{
 		ChatID:        msg.ChatID,
 		SessionState:  sessionState,
-		Persona:       msg.Agent.Persona,
+		Persona:       persona,
 		Prompt:        msg.Text,
 		Attachments:   msg.Attachments,
 		Tools:         msg.PowerSet.Tools,
 		Directories:   msg.PowerSet.Directories,
-		Instructions:  msg.PowerSet.Instructions,
+		Instructions:  instructions,
 		MCPConfigPath: mcpConfigPath,
 		Tags:          msg.Tags,
 		MaxTurns:      c.maxTurns,
-		Env: map[string]string{
-			"ROGUE_USER_ID":    msg.UserID,
-			"ROGUE_CHANNEL_ID": msg.ChannelID,
-			"ROGUE_AGENT_ID":   msg.Agent.ID,
-			"ROGUE_CHAT_ID":    msg.ChatID,
-		},
+		Env: sessionEnv,
 	}
 
 	result, err := provider.Execute(ctx, req)
@@ -113,6 +161,46 @@ func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*Ag
 	)
 
 	return result, nil
+}
+
+// buildPersona applies ROOT.md template to the agent persona.
+// If ROOT.md contains {{agent_persona}}, it substitutes inline.
+// Otherwise, if prependPersona is true, persona is prepended before ROOT.md.
+func (c *defaultCerebro) buildPersona(agentPersona string) string {
+	if !c.useRootPrompt || c.rootPrompt == "" {
+		return agentPersona
+	}
+
+	if strings.Contains(c.rootPrompt, "{{agent_persona}}") {
+		return strings.ReplaceAll(c.rootPrompt, "{{agent_persona}}", agentPersona)
+	}
+
+	if c.prependPersona && agentPersona != "" {
+		return agentPersona + "\n\n---\n\n" + c.rootPrompt
+	}
+
+	return c.rootPrompt
+}
+
+func (c *defaultCerebro) buildEnv(msg *EnrichedMessage) map[string]string {
+	env := map[string]string{
+		"ROGUE_USER_ID":    msg.UserID,
+		"ROGUE_CHANNEL_ID": msg.ChannelID,
+		"ROGUE_AGENT_ID":   msg.Agent.ID,
+		"ROGUE_CHAT_ID":    msg.ChatID,
+		"ROGUE_SOURCE_ID":  msg.SourceID,
+	}
+	// Pass message ID from metadata if available (for reactions)
+	if msg.Metadata != nil {
+		if mid, ok := msg.Metadata["telegram_message_id"]; ok {
+			env["ROGUE_MESSAGE_ID"] = fmt.Sprintf("%v", mid)
+		}
+	}
+	// Merge source env (e.g., TELEGRAM_BOT_TOKEN)
+	for k, v := range msg.SourceEnv {
+		env[k] = v
+	}
+	return env
 }
 
 // --- Conversation State Persistence ---
