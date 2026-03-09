@@ -59,8 +59,15 @@ func main() {
 		mcp.WithString("namespace", mcp.Required(), mcp.Description("Storage namespace")),
 	), handleFileList)
 
+	s.AddTool(mcp.NewTool("file_delete",
+		mcp.WithDescription("Delete a file from a namespace's file storage. Requires a confirmation code from the user."),
+		mcp.WithString("namespace", mcp.Required(), mcp.Description("Storage namespace")),
+		mcp.WithString("name", mcp.Required(), mcp.Description("File name/path within namespace")),
+		mcp.WithString("confirm", mcp.Required(), mcp.Description("User must say 'yes delete' to confirm. Ask them first.")),
+	), handleFileDelete)
+
 	s.AddTool(mcp.NewTool("backup",
-		mcp.WithDescription("Run a backup (WAL checkpoint) across all open databases."),
+		mcp.WithDescription("Run a WAL checkpoint across all databases."),
 	), handleBackup)
 
 	if err := server.ServeStdio(s); err != nil {
@@ -218,14 +225,70 @@ func handleFileList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 	return mcp.NewToolResultText(string(out)), nil
 }
 
+func handleFileDelete(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	namespace, _ := req.GetArguments()["namespace"].(string)
+	name, _ := req.GetArguments()["name"].(string)
+	confirm, _ := req.GetArguments()["confirm"].(string)
+
+	if namespace == "" || name == "" {
+		return mcp.NewToolResultError("namespace and name are required"), nil
+	}
+
+	if strings.ToLower(strings.TrimSpace(confirm)) != "yes delete" {
+		return mcp.NewToolResultError("deletion not confirmed. Ask the user to say 'yes delete' before calling this tool."), nil
+	}
+
+	ns := store.Namespace(namespace)
+	path := ns.FilePath(name)
+
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return mcp.NewToolResultError(fmt.Sprintf("file not found: %s/%s", namespace, name)), nil
+		}
+		return mcp.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Deleted %s/%s", namespace, name)), nil
+}
+
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
 
-func handleBackup(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if err := store.Backup(ctx); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("backup error: %v", err)), nil
+func handleBackup(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	dataDir := os.Getenv("ROGUE_DATA")
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("read data dir: %v", err)), nil
 	}
-	return mcp.NewToolResultText("Backup complete."), nil
+
+	var checkpointed []string
+	var errors []string
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dbPath := fmt.Sprintf("%s/%s/db/store.sqlite", dataDir, e.Name())
+		if _, err := os.Stat(dbPath); err != nil {
+			continue
+		}
+		db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: open failed: %v", e.Name(), err))
+			continue
+		}
+		if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+			errors = append(errors, fmt.Sprintf("%s: checkpoint failed: %v", e.Name(), err))
+		} else {
+			checkpointed = append(checkpointed, e.Name())
+		}
+		db.Close()
+	}
+
+	result := fmt.Sprintf("Checkpointed %d databases: %s", len(checkpointed), strings.Join(checkpointed, ", "))
+	if len(errors) > 0 {
+		result += fmt.Sprintf("\nErrors: %s", strings.Join(errors, "; "))
+	}
+	return mcp.NewToolResultText(result), nil
 }

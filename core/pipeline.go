@@ -103,8 +103,22 @@ func (p *defaultPipeline) handleMessage(ctx context.Context, msg Message) {
 		return
 	}
 
+	// Resolve source capabilities (typing, env for MCP tools)
+	var stopTyping func()
+	if src := p.telepath.Source(msg.SourceID); src != nil {
+		if ts, ok := src.(TypingSource); ok {
+			stopTyping = ts.StartTyping(msg.ChannelID)
+		}
+		if es, ok := src.(EnvSource); ok {
+			enriched.SourceEnv = es.SourceEnv()
+		}
+	}
+
 	// Cerebro: Agent execution
 	result, err := p.cerebro.Execute(ctx, enriched)
+	if stopTyping != nil {
+		stopTyping()
+	}
 	if err != nil {
 		p.logger.Error("cerebro execution failed", "error", err, "message_id", msg.ID)
 		return

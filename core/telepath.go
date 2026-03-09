@@ -46,6 +46,12 @@ func (t *defaultTelepath) Inbound() <-chan Message {
 	return t.inbound
 }
 
+func (t *defaultTelepath) Source(id string) Source {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.sources[id]
+}
+
 // InboundChan returns a writable channel for Schedule to emit messages into.
 func (t *defaultTelepath) InboundChan() chan<- Message {
 	return t.inbound

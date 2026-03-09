@@ -427,10 +427,27 @@ func (s *Source) sendReaction(chatID int64, messageID int, emoji string) {
 	s.api.MakeRequest("setMessageReaction", params)
 }
 
+// SourceEnv implements core.EnvSource — exposes bot token for MCP tools.
+func (s *Source) SourceEnv() map[string]string {
+	return map[string]string{
+		"TELEGRAM_BOT_TOKEN": s.token,
+	}
+}
+
 // --- Typing Indicator ---
 
-// StartTypingLoop sends typing indicator every 4s. Returns a stop function.
-func (s *Source) StartTypingLoop(chatID int64) func() {
+// StartTyping implements core.TypingSource. Accepts a string channelID.
+func (s *Source) StartTyping(channelID string) func() {
+	chatID, err := parseChatID(channelID)
+	if err != nil {
+		s.logger.Warn("typing: invalid channel_id", "channel_id", channelID, "error", err)
+		return func() {}
+	}
+	return s.startTypingLoop(chatID)
+}
+
+// startTypingLoop sends typing indicator every 4s. Returns a stop function.
+func (s *Source) startTypingLoop(chatID int64) func() {
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(typingTickInterval)

@@ -54,12 +54,13 @@ func (p *Provider) Execute(ctx context.Context, req core.AgentRequest) (*core.Ag
 		args = append(args, "--system-prompt", systemPrompt)
 	}
 
-	// Tool filtering: --allowedTools controls MCP tools, --disallowedTools controls builtins.
-	// We always block builtins unless explicitly granted, and only allow granted MCP tools.
+	// Tool filtering:
+	// --allowedTools controls MCP tools only (whitelist).
+	// --disallowedTools controls builtins (blacklist). This is the only way to block them.
+	// See: https://github.com/anthropics/claude-code/issues/12232
 	builtins := []string{"Bash", "Edit", "Write", "Read", "Glob", "Grep",
 		"Agent", "NotebookEdit", "WebFetch", "WebSearch"}
 
-	// Separate MCP tools from builtin tools
 	var mcpTools []string
 	grantedBuiltins := make(map[string]bool)
 	for _, t := range req.Tools {
@@ -76,13 +77,11 @@ func (p *Provider) Execute(ctx context.Context, req core.AgentRequest) (*core.Ag
 		}
 	}
 
-	// Allow only granted MCP tools
 	if len(mcpTools) > 0 {
 		args = append(args, "--allowedTools")
 		args = append(args, mcpTools...)
 	}
 
-	// Block builtins not explicitly granted
 	var blockedBuiltins []string
 	for _, b := range builtins {
 		if !grantedBuiltins[b] {
@@ -106,7 +105,7 @@ func (p *Provider) Execute(ctx context.Context, req core.AgentRequest) (*core.Ag
 
 	p.Logger.Info("spawning claude",
 		"chat_id", req.ChatID,
-		"tools", len(req.Tools),
+		"tools", req.Tools,
 		"max_turns", req.MaxTurns,
 		"resume", req.SessionState != nil,
 	)

@@ -40,8 +40,9 @@ type EnrichedMessage struct {
 	Agent    AgentConfig `json:"agent"`
 	PowerSet PowerSet    `json:"power_set"`
 	Tags     []string    `json:"tags"`
-	IsRoot   bool        `json:"is_root"`
-	Approved bool        `json:"approved"` // root is always approved; others need explicit approval
+	IsRoot    bool              `json:"is_root"`
+	Approved  bool              `json:"approved"` // root is always approved; others need explicit approval
+	SourceEnv map[string]string `json:"-"`         // env vars from source (e.g., TELEGRAM_BOT_TOKEN), not serialized
 }
 
 // User represents a resolved user record.
@@ -144,7 +145,8 @@ type ScheduledTask struct {
 	CronExpr     string
 	Reply        bool
 	Queue        string
-	Status       string // pending | running | done | failed | cancelled
+	Status       string // pending | running | awaiting_ack | done | failed | cancelled
+	RequiresAck  bool
 	Tags         []string
 }
 

@@ -242,7 +242,7 @@ func handlePowerList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 		return mcp.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
 	}
 
-	query := `SELECT user_id, agent_id, channel_id, power_name, granted_by
+	query := `SELECT user_id, agent_id, channel_id, power_name, assigned_by
 		FROM user_powers WHERE 1=1`
 	var qArgs []any
 
@@ -267,13 +267,13 @@ func handlePowerList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 		AgentID   string `json:"agent_id"`
 		ChannelID string `json:"channel_id"`
 		PowerName string `json:"power_name"`
-		GrantedBy string `json:"granted_by"`
+		AssignedBy string `json:"assigned_by"`
 	}
 
 	var results []assignment
 	for rows.Next() {
 		var a assignment
-		rows.Scan(&a.UserID, &a.AgentID, &a.ChannelID, &a.PowerName, &a.GrantedBy)
+		rows.Scan(&a.UserID, &a.AgentID, &a.ChannelID, &a.PowerName, &a.AssignedBy)
 		results = append(results, a)
 	}
 

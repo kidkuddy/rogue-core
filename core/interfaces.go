@@ -14,6 +14,20 @@ type Source interface {
 	Stop(ctx context.Context) error
 }
 
+// TypingSource is optionally implemented by sources that support typing indicators.
+type TypingSource interface {
+	// StartTyping begins a typing indicator loop. Returns a stop function.
+	StartTyping(channelID string) func()
+}
+
+// EnvSource is optionally implemented by sources that expose env vars for MCP tools.
+// For example, Telegram exposes TELEGRAM_BOT_TOKEN so agent-controlled MCP tools
+// can call the Telegram API (e.g., send reactions).
+type EnvSource interface {
+	// SourceEnv returns env vars to pass to MCP tool processes.
+	SourceEnv() map[string]string
+}
+
 // Telepath is the bidirectional message bus.
 type Telepath interface {
 	// RegisterSource adds a source to the bus.
@@ -27,6 +41,9 @@ type Telepath interface {
 
 	// Outbound sends a response to the appropriate source.
 	Outbound(ctx context.Context, resp Response) error
+
+	// Source returns a registered source by ID, or nil.
+	Source(id string) Source
 
 	// Stop gracefully shuts down all sources and the bus.
 	Stop(ctx context.Context) error
@@ -85,6 +102,7 @@ type Schedule interface {
 	Cancel(taskID string) error
 	List(status string) ([]ScheduledTask, error)
 	Delay(taskID string, duration time.Duration) error
+	Ack(taskID string) error
 }
 
 // RootResolver determines if a user is root.
