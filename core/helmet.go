@@ -99,6 +99,9 @@ func (h *defaultHelmet) Process(ctx context.Context, msg Message) (*EnrichedMess
 		return nil, fmt.Errorf("chat resolution failed: %w", err)
 	}
 
+	// Track user↔channel relationship for cross-channel messaging
+	h.trackUserChannel(db, msg.UserID, msg.SourceID, msg.ChannelID, msg.ChatType)
+
 	// 3. Get or create session
 	session := Session{
 		ID:        chatID,
@@ -185,6 +188,14 @@ func (h *defaultHelmet) ensureSchema(db *sql.DB) error {
 			chat_id TEXT NOT NULL,
 			tag TEXT NOT NULL,
 			UNIQUE(chat_id, tag)
+		);
+		CREATE TABLE IF NOT EXISTS user_channels (
+			user_id TEXT NOT NULL,
+			source_id TEXT NOT NULL,
+			channel_id TEXT NOT NULL,
+			chat_type TEXT DEFAULT 'private',
+			last_seen DATETIME DEFAULT (datetime('now')),
+			UNIQUE(user_id, source_id, channel_id)
 		);
 		CREATE TABLE IF NOT EXISTS usage_stats (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -273,6 +284,19 @@ func (h *defaultHelmet) getOrCreateChat(db *sql.DB, sourceID, channelID, agentID
 	}
 
 	return chatID, nil
+}
+
+// --- User Channel Tracking ---
+
+func (h *defaultHelmet) trackUserChannel(db *sql.DB, userID, sourceID, channelID, chatType string) {
+	if chatType == "" {
+		chatType = "private"
+	}
+	db.Exec(`INSERT INTO user_channels (user_id, source_id, channel_id, chat_type, last_seen)
+		VALUES (?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(user_id, source_id, channel_id)
+		DO UPDATE SET chat_type = excluded.chat_type, last_seen = datetime('now')`,
+		userID, sourceID, channelID, chatType)
 }
 
 // --- Agent Persona ---
