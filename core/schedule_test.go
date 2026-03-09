@@ -40,7 +40,7 @@ func TestScheduleCreateAndList(t *testing.T) {
 		t.Fatal("expected non-empty task ID")
 	}
 
-	tasks, err := sched.List("pending")
+	tasks, err := sched.List("pending", "")
 	if err != nil {
 		t.Fatalf("list failed: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestScheduleCancel(t *testing.T) {
 		t.Fatalf("cancel failed: %v", err)
 	}
 
-	tasks, _ := sched.List("cancelled")
+	tasks, _ := sched.List("cancelled", "")
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 cancelled task, got %d", len(tasks))
 	}
@@ -98,7 +98,7 @@ func TestScheduleDelay(t *testing.T) {
 		t.Fatalf("delay failed: %v", err)
 	}
 
-	tasks, _ := sched.List("pending")
+	tasks, _ := sched.List("pending", "")
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(tasks))
 	}
@@ -158,7 +158,7 @@ func TestScheduleTickFiring(t *testing.T) {
 	sched.Stop(ctx)
 
 	// Task should be marked done
-	tasks, _ := sched.List("done")
+	tasks, _ := sched.List("done", "")
 	if len(tasks) != 1 {
 		t.Errorf("expected 1 done task, got %d", len(tasks))
 	}
@@ -196,7 +196,7 @@ func TestScheduleCronReschedule(t *testing.T) {
 	sched.Stop(ctx)
 
 	// Should be rescheduled as pending, not done
-	pending, _ := sched.List("pending")
+	pending, _ := sched.List("pending", "")
 	if len(pending) != 1 {
 		t.Fatalf("expected 1 pending (rescheduled) task, got %d", len(pending))
 	}
@@ -216,12 +216,12 @@ func TestScheduleListAll(t *testing.T) {
 	sched.Cancel(id3)
 
 	// List all (no status filter)
-	all, _ := sched.List("")
+	all, _ := sched.List("", "")
 	if len(all) != 3 {
 		t.Errorf("expected 3 total tasks, got %d", len(all))
 	}
 
-	pending, _ := sched.List("pending")
+	pending, _ := sched.List("pending", "")
 	if len(pending) != 2 {
 		t.Errorf("expected 2 pending tasks, got %d", len(pending))
 	}

@@ -230,7 +230,17 @@ func (h *defaultHelmet) ensureSchema(db *sql.DB) error {
 		WHERE user_id != '' AND channel_id != ''
 		GROUP BY user_id, source_id, channel_id;
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migration: create user_aliases for existing databases
+	db.Exec(`CREATE TABLE IF NOT EXISTS user_aliases (
+		alias TEXT PRIMARY KEY COLLATE NOCASE,
+		user_id TEXT NOT NULL
+	)`)
+
+	return nil
 }
 
 // --- User Management ---
@@ -328,12 +338,53 @@ func (h *defaultHelmet) loadAgent(agentID string) AgentConfig {
 
 // --- Power Resolution ---
 
+// LoadPower loads a power by name from the given directory, falling back to embedded core powers.
+// This is a standalone function for use by MCP tools that need power metadata.
+func LoadPower(powersDir, name string) (*Power, error) {
+	path := filepath.Join(powersDir, name+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		data, err = powers.CorePowers.ReadFile(name + ".md")
+		if err != nil {
+			return nil, fmt.Errorf("power file not found: %s", name)
+		}
+	}
+
+	content := string(data)
+	var fm powerFrontmatter
+	var instructions string
+
+	if strings.HasPrefix(content, "---") {
+		parts := strings.SplitN(content[3:], "---", 2)
+		if len(parts) == 2 {
+			if err := yaml.Unmarshal([]byte(parts[0]), &fm); err != nil {
+				return nil, fmt.Errorf("invalid frontmatter in %s: %w", name, err)
+			}
+			instructions = strings.TrimSpace(parts[1])
+		}
+	}
+
+	if fm.Name == "" {
+		fm.Name = name
+	}
+
+	return &Power{
+		Name:         fm.Name,
+		Namespace:    fm.Namespace,
+		Tools:        fm.Tools,
+		Directories:  fm.Directories,
+		Instructions: instructions,
+		Schedules:    fm.Schedules,
+	}, nil
+}
+
 type powerFrontmatter struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Namespace   string   `yaml:"namespace"`
-	Tools       []string `yaml:"tools"`
-	Directories []string `yaml:"directories"`
+	Name        string          `yaml:"name"`
+	Description string          `yaml:"description"`
+	Namespace   string          `yaml:"namespace"`
+	Tools       []string        `yaml:"tools"`
+	Directories []string        `yaml:"directories"`
+	Schedules   []PowerSchedule `yaml:"schedules"`
 }
 
 func (h *defaultHelmet) loadPower(name string) (*Power, error) {
@@ -383,6 +434,7 @@ func (h *defaultHelmet) loadPower(name string) (*Power, error) {
 		Tools:        fm.Tools,
 		Directories:  fm.Directories,
 		Instructions: instructions,
+		Schedules:    fm.Schedules,
 	}
 
 	h.powerMu.Lock()

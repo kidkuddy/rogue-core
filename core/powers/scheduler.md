@@ -21,7 +21,7 @@ Tasks can require acknowledgment. When `requires_ack` is true:
 - Cron tasks with `requires_ack` won't reschedule their next run until acknowledged
 - Delaying an `awaiting_ack` task moves it back to `pending` with a new time
 
-Use `requires_ack` for important tasks that need confirmation the user actually acted on them — reminders, reviews, check-ins. Don't use it for background/silent tasks.
+All tasks require acknowledgment by default. Set `requires_ack=false` only for background/silent tasks that don't need user confirmation.
 
 ### Guidelines
 

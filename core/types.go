@@ -78,13 +78,21 @@ type PowerSet struct {
 	Instructions string   `json:"instructions"`
 }
 
+// PowerSchedule defines a recurring task that activates when a power is granted.
+type PowerSchedule struct {
+	Cron        string `json:"cron" yaml:"cron"`
+	Message     string `json:"message" yaml:"message"`
+	RequiresAck bool   `json:"requires_ack" yaml:"requires_ack"`
+}
+
 // Power is a named capability bundle.
 type Power struct {
-	Name         string   `json:"name"`
-	Namespace    string   `json:"namespace"`
-	Tools        []string `json:"tools"`
-	Directories  []string `json:"directories"`
-	Instructions string   `json:"instructions"`
+	Name         string          `json:"name"`
+	Namespace    string          `json:"namespace"`
+	Tools        []string        `json:"tools"`
+	Directories  []string        `json:"directories"`
+	Instructions string          `json:"instructions"`
+	Schedules    []PowerSchedule `json:"schedules,omitempty"`
 }
 
 // Response is an outbound message routed back through Telepath.
@@ -147,6 +155,8 @@ type ScheduledTask struct {
 	Queue        string
 	Status       string // pending | running | awaiting_ack | done | failed | cancelled
 	RequiresAck  bool
+	System       bool   // system-managed (created by power schedules)
+	PowerName    string // which power owns this task (for system tasks)
 	Tags         []string
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,12 +60,16 @@ func (s *defaultSchedule) ensureSchema() *sql.DB {
 		queue TEXT DEFAULT '',
 		status TEXT DEFAULT 'pending',
 		requires_ack BOOLEAN DEFAULT FALSE,
+		system BOOLEAN DEFAULT FALSE,
+		power_name TEXT DEFAULT '',
 		tags TEXT DEFAULT '[]',
 		created_at DATETIME DEFAULT (datetime('now')),
 		updated_at DATETIME DEFAULT (datetime('now'))
 	)`)
-	// Migration for existing DBs
+	// Migrations for existing DBs
 	db.Exec("ALTER TABLE tasks ADD COLUMN requires_ack BOOLEAN DEFAULT FALSE")
+	db.Exec("ALTER TABLE tasks ADD COLUMN system BOOLEAN DEFAULT FALSE")
+	db.Exec("ALTER TABLE tasks ADD COLUMN power_name TEXT DEFAULT ''")
 	return db
 }
 
@@ -105,7 +110,7 @@ func (s *defaultSchedule) processDueTasks(ctx context.Context, db *sql.DB, bus c
 
 	rows, err := db.Query(`
 		SELECT id, agent_id, user_id, channel_id, source_id, message_text,
-		       scheduled_for, cron_expr, reply, queue, requires_ack, tags
+		       scheduled_for, cron_expr, reply, queue, requires_ack, system, power_name, tags
 		FROM tasks
 		WHERE status = 'pending' AND scheduled_for <= ?
 		ORDER BY scheduled_for ASC
@@ -125,7 +130,8 @@ func (s *defaultSchedule) processDueTasks(ctx context.Context, db *sql.DB, bus c
 		err := rows.Scan(
 			&task.ID, &task.AgentID, &task.UserID, &task.ChannelID,
 			&task.SourceID, &task.MessageText, &scheduledForStr,
-			&task.CronExpr, &reply, &task.Queue, &task.RequiresAck, &tagsJSON,
+			&task.CronExpr, &reply, &task.Queue, &task.RequiresAck,
+			&task.System, &task.PowerName, &tagsJSON,
 		)
 		if err != nil {
 			s.logger.Warn("failed to scan task", "error", err)
@@ -214,12 +220,13 @@ func (s *defaultSchedule) Create(task ScheduledTask) (string, error) {
 
 	_, err := db.Exec(`INSERT INTO tasks
 		(id, agent_id, user_id, channel_id, source_id, message_text,
-		 scheduled_for, cron_expr, reply, queue, status, requires_ack, tags)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 scheduled_for, cron_expr, reply, queue, status, requires_ack, system, power_name, tags)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.AgentID, task.UserID, task.ChannelID,
 		task.SourceID, task.MessageText,
 		task.ScheduledFor.UTC().Format("2006-01-02 15:04:05"),
-		task.CronExpr, task.Reply, task.Queue, task.Status, task.RequiresAck, string(tagsJSON),
+		task.CronExpr, task.Reply, task.Queue, task.Status, task.RequiresAck,
+		task.System, task.PowerName, string(tagsJSON),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create task: %w", err)
@@ -251,20 +258,35 @@ func (s *defaultSchedule) Cancel(taskID string) error {
 	return nil
 }
 
-func (s *defaultSchedule) List(status string) ([]ScheduledTask, error) {
+func (s *defaultSchedule) List(status, agentID string) ([]ScheduledTask, error) {
+	return s.ListTasks(status, agentID, false)
+}
+
+func (s *defaultSchedule) ListTasks(status, agentID string, includeSystem bool) ([]ScheduledTask, error) {
 	db := s.ensureSchema()
 	if db == nil {
 		return nil, fmt.Errorf("scheduler database unavailable")
 	}
 
 	query := `SELECT id, agent_id, user_id, channel_id, source_id, message_text,
-		scheduled_for, cron_expr, reply, queue, status, requires_ack, tags
+		scheduled_for, cron_expr, reply, queue, status, requires_ack, system, power_name, tags
 		FROM tasks`
 	var args []any
+	var conditions []string
 
+	if !includeSystem {
+		conditions = append(conditions, "system = 0")
+	}
 	if status != "" {
-		query += ` WHERE status = ?`
+		conditions = append(conditions, "status = ?")
 		args = append(args, status)
+	}
+	if agentID != "" {
+		conditions = append(conditions, "agent_id = ?")
+		args = append(args, agentID)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	query += ` ORDER BY scheduled_for ASC`
 
@@ -283,7 +305,7 @@ func (s *defaultSchedule) List(status string) ([]ScheduledTask, error) {
 		err := rows.Scan(
 			&t.ID, &t.AgentID, &t.UserID, &t.ChannelID, &t.SourceID,
 			&t.MessageText, &scheduledForStr, &t.CronExpr, &reply,
-			&t.Queue, &t.Status, &t.RequiresAck, &tagsJSON,
+			&t.Queue, &t.Status, &t.RequiresAck, &t.System, &t.PowerName, &tagsJSON,
 		)
 		if err != nil {
 			continue
@@ -356,6 +378,74 @@ func (s *defaultSchedule) Ack(taskID string) error {
 		s.logger.Info("task ack'd", "task_id", taskID)
 	}
 
+	return nil
+}
+
+// --- Power Schedule Sync ---
+
+func (s *defaultSchedule) SyncPowerSchedules(agentID, userID, sourceID, channelID string, power Power) error {
+	db := s.ensureSchema()
+	if db == nil {
+		return fmt.Errorf("scheduler database unavailable")
+	}
+
+	// Remove existing system tasks for this power
+	db.Exec(`UPDATE tasks SET status = 'cancelled', updated_at = datetime('now')
+		WHERE power_name = ? AND system = 1 AND status IN ('pending', 'awaiting_ack')`, power.Name)
+
+	// Create new system tasks from power schedules
+	for _, sched := range power.Schedules {
+		next := nextCronTime(sched.Cron, time.Now())
+		task := ScheduledTask{
+			ID:          generateID(),
+			AgentID:     agentID,
+			UserID:      userID,
+			SourceID:    sourceID,
+			ChannelID:   channelID,
+			MessageText: sched.Message,
+			ScheduledFor: next,
+			CronExpr:    sched.Cron,
+			Reply:       true,
+			RequiresAck: sched.RequiresAck,
+			System:      true,
+			PowerName:   power.Name,
+			Status:      "pending",
+		}
+
+		tagsJSON, _ := json.Marshal(task.Tags)
+		_, err := db.Exec(`INSERT INTO tasks
+			(id, agent_id, user_id, channel_id, source_id, message_text,
+			 scheduled_for, cron_expr, reply, queue, status, requires_ack, system, power_name, tags)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			task.ID, task.AgentID, task.UserID, task.ChannelID,
+			task.SourceID, task.MessageText,
+			task.ScheduledFor.UTC().Format("2006-01-02 15:04:05"),
+			task.CronExpr, task.Reply, task.Queue, task.Status, task.RequiresAck,
+			task.System, task.PowerName, string(tagsJSON),
+		)
+		if err != nil {
+			s.logger.Warn("failed to create system task", "power", power.Name, "cron", sched.Cron, "error", err)
+			continue
+		}
+		s.logger.Info("system task created", "power", power.Name, "task_id", task.ID, "cron", sched.Cron, "next", next)
+	}
+
+	return nil
+}
+
+func (s *defaultSchedule) RemovePowerSchedules(powerName string) error {
+	db := s.ensureSchema()
+	if db == nil {
+		return fmt.Errorf("scheduler database unavailable")
+	}
+
+	_, err := db.Exec(`UPDATE tasks SET status = 'cancelled', updated_at = datetime('now')
+		WHERE power_name = ? AND system = 1 AND status IN ('pending', 'awaiting_ack')`, powerName)
+	if err != nil {
+		return fmt.Errorf("remove power schedules: %w", err)
+	}
+
+	s.logger.Info("power schedules removed", "power", powerName)
 	return nil
 }
 

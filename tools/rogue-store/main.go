@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -70,7 +70,7 @@ func main() {
 	), handleFileDelete)
 
 	s.AddTool(mcp.NewTool("backup",
-		mcp.WithDescription("Back up the entire data folder. Checkpoints all databases first, then copies everything to a timestamped backup directory."),
+		mcp.WithDescription("Back up the data folder. Checkpoints all databases, then commits and pushes changes via git in the data directory."),
 	), handleBackup)
 
 	if err := server.ServeStdio(s); err != nil {
@@ -294,71 +294,48 @@ func handleBackup(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult
 		db.Close()
 	}
 
-	// Step 2: Copy entire data folder to timestamped backup
-	timestamp := time.Now().Format("2006-01-02_150405")
-	backupDir := dataDir + "_backup_" + timestamp
+	// Step 2: git add, commit, push in the data directory
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	commitMsg := "backup " + timestamp
 
-	if err := copyDir(dataDir, backupDir); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("backup copy failed: %v", err)), nil
+	gitAdd := exec.Command("git", "add", "-A")
+	gitAdd.Dir = dataDir
+	if out, err := gitAdd.CombinedOutput(); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("git add failed: %v\n%s", err, out)), nil
 	}
 
-	result := fmt.Sprintf("Backup complete → %s\nCheckpointed %d databases: %s",
-		backupDir, len(checkpointed), strings.Join(checkpointed, ", "))
+	// Check if there are changes to commit
+	gitDiff := exec.Command("git", "diff", "--cached", "--quiet")
+	gitDiff.Dir = dataDir
+	if err := gitDiff.Run(); err == nil {
+		// Exit code 0 means no staged changes
+		result := fmt.Sprintf("No changes to commit.\nCheckpointed %d databases: %s",
+			len(checkpointed), strings.Join(checkpointed, ", "))
+		if len(errs) > 0 {
+			result += fmt.Sprintf("\nCheckpoint errors: %s", strings.Join(errs, "; "))
+		}
+		return mcp.NewToolResultText(result), nil
+	}
+
+	gitCommit := exec.Command("git", "commit", "-m", commitMsg)
+	gitCommit.Dir = dataDir
+	if out, err := gitCommit.CombinedOutput(); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("git commit failed: %v\n%s", err, out)), nil
+	}
+
+	result := fmt.Sprintf("Backup committed: %s\nCheckpointed %d databases: %s",
+		commitMsg, len(checkpointed), strings.Join(checkpointed, ", "))
 	if len(errs) > 0 {
 		result += fmt.Sprintf("\nCheckpoint errors: %s", strings.Join(errs, "; "))
 	}
+
+	gitPush := exec.Command("git", "push")
+	gitPush.Dir = dataDir
+	if out, err := gitPush.CombinedOutput(); err != nil {
+		result += fmt.Sprintf("\nPush failed: %v\n%s", err, out)
+	} else {
+		result += "\nPushed successfully."
+	}
+
 	return mcp.NewToolResultText(result), nil
-}
-
-func copyDir(src, dst string) error {
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, e := range entries {
-		srcPath := filepath.Join(src, e.Name())
-		dstPath := filepath.Join(dst, e.Name())
-
-		if e.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	srcInfo, err := srcFile.Stat()
-	if err != nil {
-		return err
-	}
-
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	_, err = io.Copy(dstFile, srcFile)
-	return err
 }

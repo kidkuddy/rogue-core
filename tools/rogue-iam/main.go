@@ -16,6 +16,8 @@ import (
 )
 
 var store core.Store
+var schedule core.Schedule
+var powersDir string
 
 func main() {
 	dataDir := os.Getenv("ROGUE_DATA")
@@ -24,9 +26,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	powersDir = os.Getenv("ROGUE_POWERS_DIR")
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	store = core.NewSQLiteStore(dataDir, logger)
 	defer store.Close()
+
+	schedule = core.NewSchedule(store, logger)
+
+	// Ensure alias table exists (may not exist if pipeline hasn't run with latest schema yet)
+	if db, err := store.Namespace("iam").DB(); err == nil {
+		db.Exec(`CREATE TABLE IF NOT EXISTS user_aliases (
+			alias TEXT PRIMARY KEY COLLATE NOCASE,
+			user_id TEXT NOT NULL
+		)`)
+	}
 
 	s := server.NewMCPServer("rogue-iam", "1.0.0")
 
@@ -210,6 +224,17 @@ func handlePowerGrant(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 		return mcp.NewToolResultError(fmt.Sprintf("grant failed: %v", err)), nil
 	}
 
+	// Sync system schedules if power has any
+	if powersDir != "" {
+		if power, err := core.LoadPower(powersDir, powerName); err == nil && len(power.Schedules) > 0 {
+			sourceID := os.Getenv("ROGUE_SOURCE_ID")
+			if syncErr := schedule.SyncPowerSchedules(agentID, userID, sourceID, channelID, *power); syncErr != nil {
+				logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+				logger.Warn("failed to sync power schedules", "power", powerName, "error", syncErr)
+			}
+		}
+	}
+
 	scope := "global"
 	if channelID != "" {
 		scope = "channel:" + channelID
@@ -244,6 +269,13 @@ func handlePowerRevoke(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	if affected == 0 {
 		return mcp.NewToolResultText(fmt.Sprintf("No matching grant found for power '%s'", powerName)), nil
 	}
+
+	// Remove system schedules for this power
+	if err := schedule.RemovePowerSchedules(powerName); err != nil {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		logger.Warn("failed to remove power schedules", "power", powerName, "error", err)
+	}
+
 	return mcp.NewToolResultText(fmt.Sprintf("Revoked power '%s' from user %s for agent %s", powerName, userID, agentID)), nil
 }
 

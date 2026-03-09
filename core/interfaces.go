@@ -100,9 +100,12 @@ type Schedule interface {
 	Stop(ctx context.Context) error
 	Create(task ScheduledTask) (string, error)
 	Cancel(taskID string) error
-	List(status string) ([]ScheduledTask, error)
+	List(status, agentID string) ([]ScheduledTask, error)
+	ListTasks(status, agentID string, includeSystem bool) ([]ScheduledTask, error)
 	Delay(taskID string, duration time.Duration) error
 	Ack(taskID string) error
+	SyncPowerSchedules(agentID, userID, sourceID, channelID string, power Power) error
+	RemovePowerSchedules(powerName string) error
 }
 
 // RootResolver determines if a user is root.

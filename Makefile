@@ -5,10 +5,12 @@ TOOL_BINARIES = rogue-store rogue-scheduler rogue-iam rogue-telegram
 
 build: $(CMD_BINARIES) $(TOOL_BINARIES)
 
-rogue-pipeline rogue-coordinator: rogue-%: cmd/rogue-%/main.go
+GO_SOURCES = $(shell find . -name '*.go' -not -path './docs/*')
+
+rogue-pipeline rogue-coordinator: rogue-%: $(GO_SOURCES)
 	go build -o $@ ./cmd/$@
 
-rogue-store rogue-scheduler rogue-iam rogue-telegram: rogue-%: tools/rogue-%/main.go
+rogue-store rogue-scheduler rogue-iam rogue-telegram: rogue-%: $(GO_SOURCES)
 	go build -o $@ ./tools/$@
 
 test:

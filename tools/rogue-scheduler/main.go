@@ -43,7 +43,7 @@ func main() {
 		mcp.WithString("source_id", mcp.Description("Source ID for response routing")),
 		mcp.WithString("queue", mcp.Description("Optional queue name to push results to")),
 		mcp.WithBoolean("reply", mcp.Description("Whether to send response back (default true)")),
-		mcp.WithBoolean("requires_ack", mcp.Description("If true, task stays in 'awaiting_ack' after firing until explicitly acknowledged. Cron tasks won't reschedule until ACK'd.")),
+		mcp.WithBoolean("requires_ack", mcp.Description("If true (default), task stays in 'awaiting_ack' after firing until explicitly acknowledged. Cron tasks won't reschedule until ACK'd.")),
 	), handleSchedule)
 
 	s.AddTool(mcp.NewTool("cancel_task",
@@ -52,8 +52,10 @@ func main() {
 	), handleCancel)
 
 	s.AddTool(mcp.NewTool("list_tasks",
-		mcp.WithDescription("List scheduled tasks, optionally filtered by status."),
+		mcp.WithDescription("List scheduled tasks, optionally filtered by status and/or agent. Agent defaults to current agent (ROGUE_AGENT_ID). System tasks (created by power schedules) are hidden by default."),
 		mcp.WithString("status", mcp.Description("Filter by status: pending, running, awaiting_ack, done, failed, cancelled. Empty = all.")),
+		mcp.WithString("agent_id", mcp.Description("Filter by agent ID. Defaults to ROGUE_AGENT_ID env var. Pass '*' to see all agents.")),
+		mcp.WithBoolean("include_system", mcp.Description("Include system-managed tasks (power schedules). Default false.")),
 	), handleList)
 
 	s.AddTool(mcp.NewTool("delay_task",
@@ -92,7 +94,7 @@ func handleSchedule(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRe
 		reply = r
 	}
 
-	requiresAck := false
+	requiresAck := true
 	if r, ok := req.GetArguments()["requires_ack"].(bool); ok {
 		requiresAck = r
 	}
@@ -161,8 +163,18 @@ func handleCancel(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResu
 
 func handleList(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	status, _ := req.GetArguments()["status"].(string)
+	agentID, _ := req.GetArguments()["agent_id"].(string)
+	includeSystem, _ := req.GetArguments()["include_system"].(bool)
 
-	tasks, err := schedule.List(status)
+	// Default to current agent; '*' means all agents
+	if agentID == "" {
+		agentID = os.Getenv("ROGUE_AGENT_ID")
+	}
+	if agentID == "*" {
+		agentID = ""
+	}
+
+	tasks, err := schedule.ListTasks(status, agentID, includeSystem)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("list failed: %v", err)), nil
 	}
