@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -83,8 +84,8 @@ func TestCerebroProviderRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default provider failed: %v", err)
 	}
-	if result.Content != "[stub response] received: hello" {
-		t.Errorf("expected stub response, got: %s", result.Content)
+	if !strings.Contains(result.Content, "[stub response] received:") || !strings.Contains(result.Content, "hello") {
+		t.Errorf("expected stub response containing 'hello', got: %s", result.Content)
 	}
 
 	// Message with provider tag — should route to custom

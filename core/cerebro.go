@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
 type defaultCerebro struct {
@@ -128,11 +129,18 @@ func (c *defaultCerebro) Execute(ctx context.Context, msg *EnrichedMessage) (*Ag
 	// Build final persona (apply ROOT.md template if configured)
 	persona := c.buildPersona(msg.Agent.Persona)
 
+	// Inject current time into the user prompt so the agent always knows "now",
+	// even during long multi-turn executions.
+	now := time.Now()
+	timePrefix := fmt.Sprintf("[Current time: %s | %s | %s]\n\n",
+		now.Format(time.RFC3339), now.Location().String(), now.Weekday().String())
+	prompt := timePrefix + msg.Text
+
 	req := AgentRequest{
 		ChatID:        msg.ChatID,
 		SessionState:  sessionState,
 		Persona:       persona,
-		Prompt:        msg.Text,
+		Prompt:        prompt,
 		Attachments:   msg.Attachments,
 		Tools:         msg.PowerSet.Tools,
 		Directories:   msg.PowerSet.Directories,

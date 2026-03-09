@@ -285,15 +285,9 @@ func (h *defaultHelmet) loadAgent(agentID string) AgentConfig {
 		return AgentConfig{ID: agentID, Persona: ""}
 	}
 
-	now := time.Now()
-	timeContext := fmt.Sprintf("\n\n## Current Time Context\n\nCurrent datetime: %s\nTimezone: %s\nWeekday: %s",
-		now.Format(time.RFC3339),
-		now.Location().String(),
-		now.Weekday().String())
-
 	return AgentConfig{
 		ID:      agentID,
-		Persona: string(data) + timeContext,
+		Persona: strings.TrimSpace(string(data)),
 	}
 }
 
