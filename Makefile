@@ -1,7 +1,7 @@
 .PHONY: build clean test
 
 CMD_BINARIES = rogue-pipeline rogue-coordinator
-TOOL_BINARIES = rogue-store rogue-scheduler rogue-iam
+TOOL_BINARIES = rogue-store rogue-scheduler rogue-iam rogue-telegram
 
 build: $(CMD_BINARIES) $(TOOL_BINARIES)
 
