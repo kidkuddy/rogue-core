@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kidkuddy/rogue-core/core/powers"
 	"gopkg.in/yaml.v3"
 )
 
@@ -314,10 +315,16 @@ func (h *defaultHelmet) loadPower(name string) (*Power, error) {
 	}
 	h.powerMu.RUnlock()
 
+	// Instance powers override core powers
 	path := filepath.Join(h.powersDir, name+".md")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("power file not found: %s", name)
+		// Fall back to embedded core powers
+		data, err = powers.CorePowers.ReadFile(name + ".md")
+		if err != nil {
+			return nil, fmt.Errorf("power file not found: %s", name)
+		}
+		h.logger.Info("loaded core power", "name", name)
 	}
 
 	content := string(data)
