@@ -218,6 +218,13 @@ func (h *defaultHelmet) ensureSchema(db *sql.DB) error {
 			hit_max_turns BOOLEAN DEFAULT 0,
 			session_state TEXT DEFAULT ''
 		);
+
+		-- Backfill user_channels from historical usage_stats (one-time migration, INSERT OR IGNORE is idempotent)
+		INSERT OR IGNORE INTO user_channels (user_id, source_id, channel_id, chat_type, last_seen)
+		SELECT user_id, source_id, channel_id, 'private', MAX(timestamp)
+		FROM usage_stats
+		WHERE user_id != '' AND channel_id != ''
+		GROUP BY user_id, source_id, channel_id;
 	`)
 	return err
 }
